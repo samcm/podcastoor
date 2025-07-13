@@ -80,3 +80,27 @@ export interface JobConfig {
   retryAttempts: number;
   processingTimeoutMs: number;
 }
+
+export interface ProcessingArtifacts {
+  podcastId: string;
+  episodeId: string;
+  processedAt: string;
+  audioMetadata: {
+    original: AudioMetadata;
+    processed: AudioMetadata;
+  };
+  transcript: string;
+  speakerCount: number;
+  initialAdsDetected: AdDetection[];
+  finalAdsDetected: AdDetection[];
+  chapters: Chapter[];
+  processingTime: {
+    download: number;
+    analysis: number;
+    adRefinement: number;
+    chapterGeneration: number;
+    audioProcessing: number;
+    upload: number;
+  };
+  timeSaved: number;
+}

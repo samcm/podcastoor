@@ -46,3 +46,5 @@ temp/
 # Config files
 config/*.yaml
 !config/*.example.yaml
+
+data

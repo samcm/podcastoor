@@ -11,7 +11,7 @@ podcasts:
       chunkSizeMinutes: 15
       overlapSeconds: 90
       transcriptionModel: "gemini-2.5-flash"
-      adDetectionModel: "deepseek/deepseek-r1-0528:free"
+      adDetectionModel: "google/gemini-2.0-flash-exp:free"
 
 processing:
   concurrency: 1
@@ -33,9 +33,9 @@ llm:
   openrouterEndpoint: "https://openrouter.ai/api/v1"
   models:
     geminiAudio: "gemini-2.5-flash"
-    textAdDetection: "deepseek/deepseek-r1-0528:free"
-    chapters: "deepseek/deepseek-r1-0528:free"
-    enhancement: "deepseek/deepseek-r1-0528:free"
+    textAdDetection: "google/gemini-2.0-flash-exp:free"
+    chapters: "google/gemini-2.0-flash-exp:free"
+    enhancement: "google/gemini-2.0-flash-exp:free"
   maxTokens: 250000
   temperature: 0.1
   timeoutMs: 180000

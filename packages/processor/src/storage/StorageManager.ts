@@ -4,6 +4,7 @@ import { createReadStream, promises as fs } from 'fs';
 import { join, basename } from 'path';
 import { pipeline } from 'stream';
 import { createWriteStream } from 'fs';
+import { ProcessingArtifacts } from '@podcastoor/shared';
 
 export interface StorageConfig {
   provider: 'minio' | 'r2';
@@ -136,8 +137,86 @@ export class StorageManager {
     }
   }
 
+  async uploadProcessingArtifacts(podcastId: string, episodeId: string, artifacts: ProcessingArtifacts): Promise<UploadResult> {
+    const key = this.buildArtifactKey(podcastId, episodeId);
+    
+    console.log(`Uploading processing artifacts: ${podcastId}/${episodeId} -> ${key}`);
+    
+    try {
+      const artifactData = JSON.stringify(artifacts, null, 2);
+      const buffer = Buffer.from(artifactData, 'utf8');
+      
+      const command = new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: 'application/json; charset=utf-8',
+        ContentLength: buffer.length,
+        ACL: this.config.settings.publicRead ? 'public-read' : 'private',
+        CacheControl: 'max-age=3600', // 1 hour cache
+        Metadata: {
+          'podcast-id': podcastId,
+          'episode-id': episodeId,
+          'uploaded-at': new Date().toISOString(),
+          'content-type': 'processing-artifacts'
+        }
+      });
+
+      const response = await this.s3Client.send(command);
+      
+      const url = await this.getPublicUrl(key);
+      
+      console.log(`Processing artifacts upload completed: ${key} (${buffer.length} bytes)`);
+      
+      return {
+        key,
+        url,
+        size: buffer.length,
+        etag: response.ETag || ''
+      };
+    } catch (error) {
+      throw new Error(`Failed to upload processing artifacts: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async getRSSFeedUrl(podcastId: string): Promise<string> {
     const key = `rss/${podcastId}.xml`;
+    return await this.getPublicUrl(key);
+  }
+
+  async getProcessingArtifacts(podcastId: string, episodeId: string): Promise<ProcessingArtifacts | null> {
+    const key = this.buildArtifactKey(podcastId, episodeId);
+    
+    console.log(`Retrieving processing artifacts: ${podcastId}/${episodeId} from ${key}`);
+    
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      });
+
+      const response = await this.s3Client.send(command);
+      
+      if (!response.Body) {
+        throw new Error('No data received from S3');
+      }
+
+      const bodyContents = await response.Body.transformToString();
+      const artifacts = JSON.parse(bodyContents);
+      
+      console.log(`Processing artifacts retrieved: ${key}`);
+      return artifacts;
+    } catch (error) {
+      if ((error as any).name === 'NoSuchKey') {
+        console.log(`Processing artifacts not found: ${key}`);
+        return null;
+      }
+      throw new Error(`Failed to retrieve processing artifacts: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async getProcessingArtifactsUrl(podcastId: string, episodeId: string): Promise<string> {
+    const key = this.buildArtifactKey(podcastId, episodeId);
     return await this.getPublicUrl(key);
   }
 
@@ -335,6 +414,11 @@ export class StorageManager {
     }
     
     return `podcasts/${podcastId}/${datePath}/${cleanEpisodeId}`;
+  }
+
+  private buildArtifactKey(podcastId: string, episodeId: string): string {
+    const cleanEpisodeId = episodeId.replace(/[^a-zA-Z0-9-_]/g, '-');
+    return `artifacts/${podcastId}/${cleanEpisodeId}/processing-data.json`;
   }
 
   getBucketName(): string {

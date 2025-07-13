@@ -126,7 +126,6 @@ export class PodcastProcessor {
       // Fetch RSS feed
       const feed = await this.rssProcessor.fetchFeed(podcast.rssUrl);
       console.log(`Fetched RSS feed: ${feed.title} (${feed.episodes.length} episodes)`);
-      console.log(`🔥 UPDATED CODE IS RUNNING - WITH RETENTION FILTERING 🔥`);
 
       // Calculate retention cutoff date
       const retentionDays = podcast.retentionDays || this.config.getProcessingConfig().defaultRetentionDays;
@@ -260,8 +259,15 @@ export class PodcastProcessor {
     this.storageManager = new StorageManager(storageConfig);
     this.rssProcessor = new RSSProcessor();
     
-    // Initialize job manager with database dependency
-    this.jobManager = new JobManager(jobsConfig, this.database);
+    // Initialize job manager with all required dependencies
+    this.jobManager = new JobManager(
+      jobsConfig, 
+      this.database,
+      this.audioProcessor,
+      this.llmOrchestrator,
+      this.storageManager,
+      this.rssProcessor
+    );
 
     // Test connections
     console.log('Testing service connections...');
@@ -329,5 +335,9 @@ export class PodcastProcessor {
     } catch (error) {
       console.error(`Failed to generate RSS feed for ${podcastId}:`, error);
     }
+  }
+
+  getStorageManager(): StorageManager {
+    return this.storageManager;
   }
 }

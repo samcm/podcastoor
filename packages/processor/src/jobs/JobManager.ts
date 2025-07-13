@@ -1,5 +1,10 @@
 import { DatabaseManager } from '../database/DatabaseManager';
 import { ProcessingResult } from '@podcastoor/shared';
+import { PodcastWorker } from './workers/PodcastWorker';
+import { AudioProcessor } from '../audio/AudioProcessor';
+import { LLMOrchestrator } from '../llm/LLMOrchestrator';
+import { StorageManager } from '../storage/StorageManager';
+import { RSSProcessor } from '../rss/RSSProcessor';
 
 export interface JobConfig {
   concurrency: number;
@@ -24,10 +29,25 @@ export class JobManager {
   private config: JobConfig;
   private isRunning: boolean = false;
   private processingInterval?: NodeJS.Timeout;
+  private podcastWorker: PodcastWorker;
+  private runningJobsCount: number = 0;
 
-  constructor(config: JobConfig, database: DatabaseManager) {
+  constructor(
+    config: JobConfig, 
+    database: DatabaseManager,
+    audioProcessor: AudioProcessor,
+    llmOrchestrator: LLMOrchestrator,
+    storageManager: StorageManager,
+    rssProcessor: RSSProcessor
+  ) {
     this.config = config;
     this.db = database;
+    this.podcastWorker = new PodcastWorker(
+      audioProcessor,
+      llmOrchestrator,
+      storageManager,
+      rssProcessor
+    );
   }
 
   async start(): Promise<void> {
@@ -42,7 +62,7 @@ export class JobManager {
     // Start processing loop
     this.processingInterval = setInterval(() => {
       this.processJobs();
-    }, 1000); // Check for jobs every second
+    }, 15000); // Check for jobs every second
 
     console.log(`JobManager started with concurrency: ${this.config.concurrency}`);
   }
@@ -61,14 +81,11 @@ export class JobManager {
       this.processingInterval = undefined;
     }
 
-    // Wait for running jobs to complete
-    let attempts = 0;
-    const maxAttempts = 30;
     
-    while (this.getRunningJobsCount() > 0 && attempts < maxAttempts) {
-      console.log(`Waiting for ${this.getRunningJobsCount()} jobs to complete...`);
+    while (this.getRunningJobsCount() > 0) {
+      console.debug(`Waiting for ${this.getRunningJobsCount()} jobs to complete...`);
+
       await new Promise(resolve => setTimeout(resolve, 1000));
-      attempts++;
     }
 
     console.log('JobManager stopped');
@@ -113,7 +130,11 @@ export class JobManager {
     const runningJobs = this.getRunningJobsCount();
     const availableSlots = this.config.concurrency - runningJobs;
 
-    if (availableSlots <= 0) return;
+    if (availableSlots <= 0) {
+      return;
+    }
+
+    console.log(`Processing jobs: ${runningJobs} running, ${availableSlots} slots available (max: ${this.config.concurrency})`);
 
     // Process available jobs
     for (let i = 0; i < availableSlots; i++) {
@@ -124,15 +145,27 @@ export class JobManager {
       const marked = await this.db.markJobRunning(job.id);
       if (!marked) continue;
 
-      this.processJob(job);
+      console.log(`Starting job ${job.id} (slot ${i + 1}/${availableSlots})`);
+      
+      // Increment counter BEFORE starting the async job to prevent race conditions
+      this.runningJobsCount++;
+      
+      // Process job asynchronously (don't await here to allow parallel processing)
+      this.processJob(job).catch(error => {
+        // If processJob fails to start, decrement the counter
+        this.runningJobsCount--;
+        console.error(`Failed to start job ${job.id}:`, error);
+      });
     }
   }
 
   private async processJob(job: any): Promise<void> {
     const jobId = job.id;
     
+    // Counter is now incremented in processJobs() before calling this method
+    
     try {
-      console.log(`Processing job ${jobId} (${job.type})`);
+      console.log(`Processing job ${jobId} (${job.type}) - Running jobs: ${this.runningJobsCount}/${this.config.concurrency}`);
 
       let result: any;
       const jobData = JSON.parse(job.data);
@@ -155,13 +188,29 @@ export class JobManager {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`Job ${jobId} failed:`, errorMessage);
       await this.db.markJobFailed(jobId, errorMessage);
+    } finally {
+      // Decrement running jobs counter
+      this.runningJobsCount--;
     }
   }
 
   private async processPodcastJob(data: PodcastJobData): Promise<ProcessingResult> {
     const { episodeId, podcastId, episodeGuid, audioUrl } = data;
+    const startTime = Date.now();
     
-    console.log(`Processing episode: ${podcastId}/${episodeGuid}`);
+    // Get full episode details for comprehensive logging
+    const episode = await this.db.getEpisodeById(episodeId);
+    if (!episode) {
+      throw new Error(`Episode not found: ${episodeId}`);
+    }
+
+    console.log(`🎙️  Processing episode: "${episode.title}"`);
+    console.log(`📊 Episode Details:`);
+    console.log(`   • Podcast: ${podcastId}`);
+    console.log(`   • GUID: ${episodeGuid}`);
+    console.log(`   • Duration: ${this.formatDuration(episode.duration)}`);
+    console.log(`   • Published: ${episode.publishDate.toLocaleDateString()}`);
+    console.log(`   • Audio URL: ${audioUrl}`);
     
     try {
       // Mark episode as processing in database
@@ -170,27 +219,34 @@ export class JobManager {
         throw new Error('Episode already being processed or completed');
       }
 
-      // Here would be the actual processing logic
-      // For now, return mock result
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      const result: ProcessingResult = {
-        podcastId,
-        episodeId: episodeGuid,
-        originalUrl: audioUrl,
-        processedUrl: `https://storage.example.com/processed/${podcastId}/${episodeGuid}.mp3`,
-        adsRemoved: [],
-        chapters: [],
-        processingCost: 0.05,
-        processedAt: new Date()
+      // Create job object with progress tracking
+      const job = {
+        id: episodeId,
+        data,
+        attemptsMade: 0,
+        updateProgress: async (percentage: number) => {
+          console.log(`📈 Progress: ${percentage}% (${this.getElapsedTime(startTime)})`);
+          // Could update database with progress here
+        }
       };
+
+      // Use the actual PodcastWorker for production processing
+      const result = await this.podcastWorker.processPodcastEpisode(job);
 
       // Mark episode as completed and store results
       await this.db.markEpisodeCompleted(episodeId, result);
       
-      console.log(`Episode processing completed: ${podcastId}/${episodeGuid}`);
+      const totalTime = this.getElapsedTime(startTime);
+      console.log(`✅ Episode processing completed: "${episode.title}" (${totalTime})`);
+      console.log(`💰 Processing cost: $${result.processingCost.toFixed(2)}`);
+      console.log(`📤 Processed audio uploaded to: ${result.processedUrl}`);
+      
       return result;
     } catch (error) {
+      const totalTime = this.getElapsedTime(startTime);
+      console.error(`❌ Episode processing failed: "${episode.title}" (${totalTime})`);
+      console.error(`🔍 Error details: ${error instanceof Error ? error.message : String(error)}`);
+      
       await this.db.markEpisodeFailed(episodeId, error instanceof Error ? error.message : String(error));
       throw error;
     }
@@ -208,7 +264,33 @@ export class JobManager {
   }
 
   private getRunningJobsCount(): number {
-    // This would query the database, but for now return 0
-    return 0;
+    return this.runningJobsCount;
+  }
+
+  private getElapsedTime(startTime: number): string {
+    const elapsed = Date.now() - startTime;
+    const seconds = Math.floor(elapsed / 1000);
+    const ms = elapsed % 1000;
+    return `${seconds}.${ms.toString().padStart(3, '0')}s`;
+  }
+
+  private formatDuration(seconds: number): string {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${secs}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${secs}s`;
+    } else {
+      return `${secs}s`;
+    }
+  }
+
+  private formatTime(seconds: number): string {
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
   }
 }
