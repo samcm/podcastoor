@@ -1,0 +1,25 @@
+# Docker Compose override for development
+# This file is automatically loaded by docker-compose and extends docker-compose.yml
+
+version: '3.8'
+
+services:
+  processor:
+    # Use the config.docker.yaml for Docker-specific settings
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - STORAGE_ACCESS_KEY=minioadmin
+      - STORAGE_SECRET_KEY=minioadmin123
+      - NODE_ENV=development
+      - CONFIG_PATH=/app/config
+      - DEBUG=*
+    volumes:
+      # Mount both config files
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./tmp:/app/tmp
+    # Enable for development debugging
+    # ports:
+    #   - "9229:9229"  # Node.js debugger
+    command: ["node", "packages/processor/dist/index.js"]

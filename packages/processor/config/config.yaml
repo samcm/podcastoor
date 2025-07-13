@@ -1,0 +1,64 @@
+# Test configuration for debugging
+podcasts:
+  - id: "test-podcast"
+    name: "Test Podcast"
+    rssUrl: "https://feeds.acast.com/public/shows/64e7e1ab41e6ea0011d91292"
+    enabled: true
+    retentionDays: 14
+    processingOptions:
+      removeAds: true
+      generateChapters: true
+      chunkSizeMinutes: 15
+      overlapSeconds: 90
+      transcriptionModel: "gemini-2.5-flash"
+      adDetectionModel: "deepseek/deepseek-r1-0528:free"
+
+processing:
+  concurrency: 1
+  retryAttempts: 3
+  defaultRetentionDays: 14
+  tempDirectory: "./tmp"
+  maxFileSize: "1000MB"
+  maxDuration: 28800  # 8 hours in seconds
+  timeoutMinutes: 60
+  audioQuality:
+    format: "mp3"
+    bitrate: 192
+    sampleRate: 44100
+    normalize: true
+
+llm:
+  geminiApiKey: "test-key"
+  openrouterApiKey: "test-key"
+  openrouterEndpoint: "https://openrouter.ai/api/v1"
+  models:
+    geminiAudio: "gemini-2.5-flash"
+    textAdDetection: "deepseek/deepseek-r1-0528:free"
+    chapters: "deepseek/deepseek-r1-0528:free"
+    enhancement: "deepseek/deepseek-r1-0528:free"
+  maxTokens: 250000
+  temperature: 0.1
+  timeoutMs: 180000
+  costLimits:
+    maxCostPerEpisode: 2.00
+
+storage:
+  provider: "minio"
+  endpoint: "http://localhost:9000"
+  bucket: "podcastoor"
+  region: "auto"
+  accessKeyId: "test-key"
+  secretAccessKey: "test-secret"
+  settings:
+    publicRead: true
+    presignedExpiry: 3600
+    multipartThreshold: "100MB"
+    maxConcurrentUploads: 3
+
+database:
+  path: "./test.db"
+
+jobs:
+  concurrency: 1
+  retryAttempts: 1
+  processingTimeoutMinutes: 60
