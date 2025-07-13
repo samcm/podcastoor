@@ -1,0 +1,22 @@
+{
+  "name": "@podcastoor/worker",
+  "version": "0.1.0",
+  "description": "Cloudflare Worker RSS proxy for Podcastoor",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "wrangler build",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@podcastoor/shared": "workspace:*",
+    "hono": "^3.11.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.20.0",
+    "typescript": "^5.0.0",
+    "@cloudflare/workers-types": "^4.20231218.0"
+  }
+}

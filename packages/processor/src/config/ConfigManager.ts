@@ -1,0 +1,231 @@
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
+import { parse } from 'yaml';
+import { watch } from 'chokidar';
+import { 
+  PodcastConfig, 
+  PodcastConfigSchema, 
+  validateConfig 
+} from '@podcastoor/shared';
+
+export interface AppConfig {
+  podcasts: PodcastConfig[];
+  processing: {
+    concurrency: number;
+    retryAttempts: number;
+    defaultRetentionDays: number;
+    tempDirectory: string;
+    maxFileSize: string;
+    maxDuration: number;
+    timeoutMinutes: number;
+    audioQuality: {
+      format: string;
+      bitrate: number;
+      sampleRate: number;
+      normalize: boolean;
+    };
+  };
+  llm: {
+    endpoint: string;
+    apiKey: string;
+    models: {
+      transcription: string;
+      adDetection: string;
+      chapters: string;
+      enhancement: string;
+    };
+    maxTokens: number;
+    temperature: number;
+    timeoutMs: number;
+    costLimits: {
+      maxCostPerEpisode: number;
+    };
+  };
+  storage: {
+    provider: 'minio' | 'r2';
+    endpoint: string;
+    bucket: string;
+    region?: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    settings: {
+      publicRead: boolean;
+      presignedExpiry: number;
+      multipartThreshold: string;
+      maxConcurrentUploads: number;
+    };
+  };
+  jobs: {
+    dbPath: string;
+    concurrency: number;
+    retryAttempts: number;
+    processingTimeoutMs: number;
+  };
+}
+
+export class ConfigManager {
+  private config: AppConfig;
+  private configFilePath: string;
+  private watcher?: any;
+  private changeCallbacks: Set<(config: AppConfig) => void> = new Set();
+
+  constructor(configPath: string) {
+    this.configFilePath = join(configPath, 'config.yaml');
+    this.config = this.loadConfig();
+  }
+
+  static async fromFile(configPath: string): Promise<ConfigManager> {
+    return new ConfigManager(configPath);
+  }
+
+  private loadConfig(): AppConfig {
+    if (!existsSync(this.configFilePath)) {
+      throw new Error(`Configuration file not found: ${this.configFilePath}`);
+    }
+
+    try {
+      const content = readFileSync(this.configFilePath, 'utf8');
+      const rawConfig = parse(content);
+
+      // Validate podcast configs
+      if (Array.isArray(rawConfig.podcasts)) {
+        rawConfig.podcasts.forEach((podcast: unknown, index: number) => {
+          try {
+            validateConfig(PodcastConfigSchema, podcast);
+          } catch (error) {
+            throw new Error(`Invalid podcast configuration at index ${index}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        });
+      }
+
+      // Expand environment variables
+      this.expandEnvironmentVariables(rawConfig);
+
+      return rawConfig as AppConfig;
+    } catch (error) {
+      throw new Error(`Failed to load configuration: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private expandEnvironmentVariables(obj: any): void {
+    for (const key in obj) {
+      if (typeof obj[key] === 'string' && obj[key].startsWith('${') && obj[key].endsWith('}')) {
+        const envVarName = obj[key].slice(2, -1);
+        const [varName, defaultValue] = envVarName.split(':-');
+        obj[key] = process.env[varName] || defaultValue || '';
+      } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+        this.expandEnvironmentVariables(obj[key]);
+      }
+    }
+  }
+
+  async loadPodcasts(): Promise<PodcastConfig[]> {
+    return this.config.podcasts.filter(p => p.enabled);
+  }
+
+  async getAllPodcasts(): Promise<PodcastConfig[]> {
+    return this.config.podcasts;
+  }
+
+  async getPodcast(id: string): Promise<PodcastConfig | undefined> {
+    return this.config.podcasts.find(p => p.id === id);
+  }
+
+  async updatePodcast(id: string, updates: Partial<PodcastConfig>): Promise<void> {
+    const podcastIndex = this.config.podcasts.findIndex(p => p.id === id);
+    if (podcastIndex === -1) {
+      throw new Error(`Podcast with id '${id}' not found`);
+    }
+
+    this.config.podcasts[podcastIndex] = {
+      ...this.config.podcasts[podcastIndex],
+      ...updates
+    };
+
+    // Validate updated config
+    validateConfig(PodcastConfigSchema, this.config.podcasts[podcastIndex]);
+    
+    this.notifyConfigChange();
+  }
+
+  getProcessingConfig() {
+    return this.config.processing;
+  }
+
+  getLLMConfig() {
+    return this.config.llm;
+  }
+
+  getStorageConfig() {
+    return this.config.storage;
+  }
+
+  getJobsConfig() {
+    return this.config.jobs;
+  }
+
+  onConfigChange(callback: (config: AppConfig) => void): void {
+    this.changeCallbacks.add(callback);
+  }
+
+  offConfigChange(callback: (config: AppConfig) => void): void {
+    this.changeCallbacks.delete(callback);
+  }
+
+  startWatching(): void {
+    this.watcher = watch(this.configFilePath)
+      .on('change', () => {
+        try {
+          this.config = this.loadConfig();
+          this.notifyConfigChange();
+          console.log('Configuration reloaded');
+        } catch (error) {
+          console.error('Failed to reload configuration:', error);
+        }
+      });
+
+    console.log('Configuration file watching started');
+  }
+
+  stopWatching(): void {
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = undefined;
+    }
+    console.log('Configuration file watching stopped');
+  }
+
+  private notifyConfigChange(): void {
+    this.changeCallbacks.forEach(callback => {
+      try {
+        callback(this.config);
+      } catch (error) {
+        console.error('Error in config change callback:', error);
+      }
+    });
+  }
+
+  validateConfig(config: unknown): AppConfig {
+    // Basic structure validation
+    if (!config || typeof config !== 'object') {
+      throw new Error('Configuration must be an object');
+    }
+
+    const cfg = config as any;
+
+    if (!Array.isArray(cfg.podcasts)) {
+      throw new Error('Configuration must include podcasts array');
+    }
+
+    // Validate each podcast
+    cfg.podcasts.forEach((podcast: unknown, index: number) => {
+      try {
+        validateConfig(PodcastConfigSchema, podcast);
+      } catch (error) {
+        throw new Error(`Invalid podcast configuration at index ${index}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+
+    return cfg as AppConfig;
+  }
+}
