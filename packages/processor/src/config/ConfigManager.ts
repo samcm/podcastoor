@@ -26,11 +26,12 @@ export interface AppConfig {
     };
   };
   llm: {
-    endpoint: string;
-    apiKey: string;
+    geminiApiKey: string;
+    openrouterApiKey: string;
+    openrouterEndpoint: string;
     models: {
-      transcription: string;
-      adDetection: string;
+      geminiAudio: string;
+      textAdDetection: string;
       chapters: string;
       enhancement: string;
     };
@@ -55,11 +56,13 @@ export interface AppConfig {
       maxConcurrentUploads: number;
     };
   };
+  database: {
+    path: string;
+  };
   jobs: {
-    dbPath: string;
     concurrency: number;
     retryAttempts: number;
-    processingTimeoutMs: number;
+    processingTimeoutMinutes: number;
   };
 }
 
@@ -108,11 +111,20 @@ export class ConfigManager {
   }
 
   private expandEnvironmentVariables(obj: any): void {
+    const requiredEnvVars = ['GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'STORAGE_ACCESS_KEY', 'STORAGE_SECRET_KEY'];
+    
     for (const key in obj) {
       if (typeof obj[key] === 'string' && obj[key].startsWith('${') && obj[key].endsWith('}')) {
         const envVarName = obj[key].slice(2, -1);
         const [varName, defaultValue] = envVarName.split(':-');
-        obj[key] = process.env[varName] || defaultValue || '';
+        const envValue = process.env[varName];
+        
+        // Check if this is a required environment variable
+        if (requiredEnvVars.includes(varName) && (!envValue || envValue.trim() === '')) {
+          throw new Error(`Required environment variable ${varName} is not set or is empty. Please set this variable before starting the application.`);
+        }
+        
+        obj[key] = envValue || defaultValue || '';
       } else if (typeof obj[key] === 'object' && obj[key] !== null) {
         this.expandEnvironmentVariables(obj[key]);
       }
@@ -158,6 +170,10 @@ export class ConfigManager {
 
   getStorageConfig() {
     return this.config.storage;
+  }
+
+  getDatabaseConfig() {
+    return this.config.database;
   }
 
   getJobsConfig() {

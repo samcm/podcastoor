@@ -1,6 +1,6 @@
 import { Hono, Context } from 'hono';
 import { logger } from 'hono/logger';
-import { PodcastProcessor } from '../PodcastProcessor.js';
+import { PodcastProcessor } from '../PodcastProcessor';
 
 export function createAPIServer(processor: PodcastProcessor) {
   const app = new Hono();
@@ -9,12 +9,20 @@ export function createAPIServer(processor: PodcastProcessor) {
 
   // Health check
   app.get('/health', async (c: Context) => {
-    const stats = await processor.getProcessingStats();
-    return c.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      stats
-    });
+    try {
+      const stats = await processor.getProcessingStats();
+      return c.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        stats
+      });
+    } catch (error) {
+      return c.json({
+        status: 'unhealthy',
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }, 503);
+    }
   });
 
   // Process specific podcast
@@ -47,8 +55,14 @@ export function createAPIServer(processor: PodcastProcessor) {
 
   // Get processing statistics
   app.get('/api/stats', async (c: Context) => {
-    const stats = await processor.getProcessingStats();
-    return c.json(stats);
+    try {
+      const stats = await processor.getProcessingStats();
+      return c.json(stats);
+    } catch (error) {
+      return c.json({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, 500);
+    }
   });
 
   // Cleanup old files

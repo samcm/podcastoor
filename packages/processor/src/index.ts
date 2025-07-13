@@ -1,13 +1,21 @@
-import { PodcastProcessor } from './PodcastProcessor.js';
+import { PodcastProcessor } from './PodcastProcessor';
+import { createAPIServer } from './api/server';
+import { serve } from '@hono/node-server';
 
 async function main() {
   const configPath = process.env.CONFIG_PATH || './config';
   const processor = new PodcastProcessor(configPath);
 
+  let server: any = null;
+
   // Graceful shutdown handling
   const shutdown = async (signal: string) => {
     console.log(`Received ${signal}, shutting down gracefully...`);
     try {
+      if (server) {
+        console.log('Stopping HTTP server...');
+        server.close();
+      }
       await processor.stop();
       process.exit(0);
     } catch (error) {
@@ -35,8 +43,20 @@ async function main() {
     console.log('Starting Podcastoor processor...');
     await processor.start();
     
-    // Keep the process running
-    console.log('Processor is running. Press Ctrl+C to stop.');
+    // Start HTTP API server
+    const app = createAPIServer(processor);
+    const port = process.env.PORT || 3000;
+    
+    console.log(`Starting HTTP server on port ${port}...`);
+    server = serve({
+      fetch: app.fetch,
+      port: Number(port),
+    });
+    
+    console.log(`Processor is running. HTTP server available at http://localhost:${port}`);
+    console.log(`Health check: http://localhost:${port}/health`);
+    console.log('Press Ctrl+C to stop.');
+    
   } catch (error) {
     console.error('Failed to start processor:', error);
     process.exit(1);
@@ -44,18 +64,19 @@ async function main() {
 }
 
 // Export the processor class for programmatic use
-export { PodcastProcessor } from './PodcastProcessor.js';
+export { PodcastProcessor } from './PodcastProcessor';
 
 // Export other modules for external use
-export * from './llm/index.js';
-export * from './audio/index.js';
-export * from './storage/index.js';
-export * from './rss/index.js';
-export * from './jobs/index.js';
-export * from './api/index.js';
+export * from './llm/index';
+export * from './audio/index';
+export * from './storage/index';
+export * from './rss/index';
+export * from './jobs/index';
+export * from './api/index';
+export * from './database/index';
 
 // Run if this is the main module
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (require.main === module) {
   main().catch((error) => {
     console.error('Fatal error:', error);
     process.exit(1);

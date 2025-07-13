@@ -7,7 +7,14 @@
     "test": "turbo run test",
     "dev": "turbo run dev --parallel",
     "lint": "turbo run lint",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "docker:setup": "make setup",
+    "docker:start": "make start",
+    "docker:stop": "make stop",
+    "docker:build": "make build",
+    "docker:check": "make check",
+    "docker:logs": "make logs",
+    "docker:reset": "make reset"
   },
   "devDependencies": {
     "turbo": "^2.0.0",

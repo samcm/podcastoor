@@ -1,8 +1,9 @@
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { createReadStream, createWriteStream, promises as fs } from 'fs';
-import { pipeline } from 'stream/promises';
+import { createReadStream, promises as fs } from 'fs';
 import { join, basename } from 'path';
+import { pipeline } from 'stream';
+import { createWriteStream } from 'fs';
 
 export interface StorageConfig {
   provider: 'minio' | 'r2';
@@ -95,6 +96,51 @@ export class StorageManager {
     }
   }
 
+  async uploadRSSFeed(podcastId: string, feedContent: string): Promise<UploadResult> {
+    const key = `rss/${podcastId}.xml`;
+    
+    console.log(`Uploading RSS feed: ${podcastId} -> ${key}`);
+    
+    try {
+      const buffer = Buffer.from(feedContent, 'utf8');
+      
+      const command = new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: 'application/rss+xml; charset=utf-8',
+        ContentLength: buffer.length,
+        ACL: this.config.settings.publicRead ? 'public-read' : 'private',
+        CacheControl: 'max-age=300', // 5 minutes cache
+        Metadata: {
+          'podcast-id': podcastId,
+          'uploaded-at': new Date().toISOString(),
+          'content-type': 'rss-feed'
+        }
+      });
+
+      const response = await this.s3Client.send(command);
+      
+      const url = await this.getPublicUrl(key);
+      
+      console.log(`RSS feed upload completed: ${key} (${buffer.length} bytes)`);
+      
+      return {
+        key,
+        url,
+        size: buffer.length,
+        etag: response.ETag || ''
+      };
+    } catch (error) {
+      throw new Error(`Failed to upload RSS feed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async getRSSFeedUrl(podcastId: string): Promise<string> {
+    const key = `rss/${podcastId}.xml`;
+    return await this.getPublicUrl(key);
+  }
+
   async downloadAudio(key: string, outputPath: string): Promise<void> {
     console.log(`Downloading audio file: ${key} -> ${outputPath}`);
     
@@ -136,6 +182,23 @@ export class StorageManager {
       console.log(`Deletion completed: ${key}`);
     } catch (error) {
       throw new Error(`Failed to delete audio file: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async deleteRSSFeed(podcastId: string): Promise<void> {
+    const key = `rss/${podcastId}.xml`;
+    console.log(`Deleting RSS feed: ${key}`);
+    
+    try {
+      const command = new DeleteObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      });
+
+      await this.s3Client.send(command);
+      console.log(`RSS feed deletion completed: ${key}`);
+    } catch (error) {
+      throw new Error(`Failed to delete RSS feed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

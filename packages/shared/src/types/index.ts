@@ -75,7 +75,8 @@ export interface StorageConfig {
 }
 
 export interface JobConfig {
-  redisUrl: string;
+  dbPath: string;
   concurrency: number;
   retryAttempts: number;
+  processingTimeoutMs: number;
 }

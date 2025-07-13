@@ -1,1 +1,1 @@
-export { LLMOrchestrator, type LLMConfig, type LLMUsage } from './LLMOrchestrator.js';
+export { LLMOrchestrator, type LLMConfig, type LLMUsage } from './LLMOrchestrator';

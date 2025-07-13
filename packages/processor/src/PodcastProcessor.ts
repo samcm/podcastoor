@@ -1,14 +1,16 @@
 import cron from 'node-cron';
-import { ConfigManager } from './config/ConfigManager.js';
-import { JobManager } from './jobs/JobManager.js';
-import { RSSProcessor } from './rss/RSSProcessor.js';
-import { StorageManager } from './storage/StorageManager.js';
-import { AudioProcessor } from './audio/AudioProcessor.js';
-import { LLMOrchestrator } from './llm/LLMOrchestrator.js';
+import { ConfigManager } from './config/ConfigManager';
+import { JobManager } from './jobs/JobManager';
+import { DatabaseManager } from './database/DatabaseManager';
+import { RSSProcessor } from './rss/RSSProcessor';
+import { StorageManager } from './storage/StorageManager';
+import { AudioProcessor } from './audio/AudioProcessor';
+import { LLMOrchestrator } from './llm/LLMOrchestrator';
 import { PodcastConfig, ProcessingResult } from '@podcastoor/shared';
 
 export class PodcastProcessor {
   private config: ConfigManager;
+  private database!: DatabaseManager;
   private jobManager!: JobManager;
   private rssProcessor!: RSSProcessor;
   private storageManager!: StorageManager;
@@ -30,22 +32,14 @@ export class PodcastProcessor {
     console.log('Starting PodcastProcessor...');
 
     try {
-      // Initialize configuration
       await this.initializeServices();
-      
-      // Start job manager
       await this.jobManager.start();
-      
-      // Setup scheduled tasks
       this.setupCronJobs();
-      
-      // Start configuration watching
       this.config.startWatching();
       
       this.isRunning = true;
       console.log('PodcastProcessor started successfully');
       
-      // Process existing podcasts on startup
       await this.processAllPodcasts();
       
     } catch (error) {
@@ -63,24 +57,20 @@ export class PodcastProcessor {
     console.log('Stopping PodcastProcessor...');
 
     try {
-      // Stop cron jobs
       this.cronJobs.forEach((task, name) => {
-        task.destroy();
+        task.stop();
         console.log(`Stopped cron job: ${name}`);
       });
       this.cronJobs.clear();
 
-      // Stop configuration watching
       this.config.stopWatching();
-
-      // Stop job manager
       await this.jobManager.stop();
 
-      // Cleanup audio processor
       if (this.audioProcessor) {
         await this.audioProcessor.cleanup();
       }
 
+      this.database.close();
       this.isRunning = false;
       console.log('PodcastProcessor stopped');
     } catch (error) {
@@ -119,33 +109,85 @@ export class PodcastProcessor {
         return;
       }
 
+      // Check if we need to fetch RSS (avoid unnecessary fetches)
+      const state = await this.database.getPodcastState(podcastId);
+      const now = new Date();
+      const lastFetch = state?.lastRSSFetch || new Date(0);
+      const hoursSinceLastFetch = (now.getTime() - lastFetch.getTime()) / (1000 * 60 * 60);
+
+      if (hoursSinceLastFetch < 1) {
+        console.log(`RSS recently fetched for ${podcastId}, skipping`);
+        
+        // Still queue any unprocessed episodes
+        await this.queueUnprocessedEpisodes(podcastId);
+        return;
+      }
+
       // Fetch RSS feed
       const feed = await this.rssProcessor.fetchFeed(podcast.rssUrl);
       console.log(`Fetched RSS feed: ${feed.title} (${feed.episodes.length} episodes)`);
+      console.log(`🔥 UPDATED CODE IS RUNNING - WITH RETENTION FILTERING 🔥`);
 
-      // Get last processed timestamp (could be stored in SQLite)
-      const lastProcessed = this.getLastProcessedTime(podcastId);
+      // Calculate retention cutoff date
+      const retentionDays = podcast.retentionDays || this.config.getProcessingConfig().defaultRetentionDays;
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+      console.log(`Retention policy: ${retentionDays} days (cutoff: ${cutoffDate.toISOString()})`);
+
+      // Store/update episodes in database
+      const newEpisodes: number[] = [];
+      let skippedOldEpisodes = 0;
       
-      // Filter new episodes
-      const newEpisodes = await this.rssProcessor.filterNewEpisodes(feed.episodes, lastProcessed);
-      console.log(`Found ${newEpisodes.length} new episodes`);
+      for (const episode of feed.episodes) {
+        // Skip episodes older than retention policy
+        if (episode.publishDate < cutoffDate) {
+          skippedOldEpisodes++;
+          continue;
+        }
 
-      // Queue new episodes for processing
-      for (const episode of newEpisodes) {
-        await this.jobManager.addPodcastProcessingJob(
-          podcastId,
-          episode.guid,
-          episode.audioUrl,
-          10 // High priority for new episodes
-        );
-        console.log(`Queued episode: ${episode.title}`);
+        const isProcessed = await this.database.isEpisodeProcessed(podcastId, episode.guid);
+        if (!isProcessed) {
+          const episodeId = await this.database.upsertEpisode(podcastId, episode);
+          newEpisodes.push(episodeId);
+        }
       }
 
-      // Update last processed timestamp
-      this.setLastProcessedTime(podcastId, new Date());
+      if (skippedOldEpisodes > 0) {
+        console.log(`Skipped ${skippedOldEpisodes} episodes older than ${retentionDays} days`);
+      }
+
+      console.log(`Found ${newEpisodes.length} new episodes to process`);
+
+      // Queue new episodes for processing
+      for (const episodeId of newEpisodes) {
+        await this.jobManager.addPodcastProcessingJob(episodeId, 10);
+      }
+
+      // Update podcast state
+      await this.database.updatePodcastState(podcastId, {
+        lastRSSFetch: now,
+        lastProcessed: now,
+        totalEpisodes: feed.episodes.length,
+        processedEpisodes: feed.episodes.length - newEpisodes.length
+      });
+
+      // Generate and upload RSS feed
+      await this.generateAndUploadRSSFeed(podcastId);
 
     } catch (error) {
       this.handleProcessingError(error as Error, podcastId);
+    }
+  }
+
+  private async queueUnprocessedEpisodes(podcastId: string): Promise<void> {
+    const unprocessed = await this.database.getUnprocessedEpisodes(podcastId);
+    
+    for (const episode of unprocessed) {
+      await this.jobManager.addPodcastProcessingJob(episode.id, 5);
+    }
+    
+    if (unprocessed.length > 0) {
+      console.log(`Queued ${unprocessed.length} unprocessed episodes for ${podcastId}`);
     }
   }
 
@@ -184,12 +226,12 @@ export class PodcastProcessor {
         queueStats,
         configuredPodcasts: allPodcasts.length,
         enabledPodcasts: enabledPodcasts.length,
-        lastProcessingRun: this.getLastGlobalProcessingTime()
+        lastProcessingRun: null // Could get from database
       };
     } catch (error) {
       console.error('Failed to get processing stats:', error);
       return {
-        queueStats: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 },
+        queueStats: { waiting: 0, active: 0, completed: 0, failed: 0 },
         configuredPodcasts: 0,
         enabledPodcasts: 0,
         lastProcessingRun: null
@@ -198,13 +240,16 @@ export class PodcastProcessor {
   }
 
   private async initializeServices(): Promise<void> {
-    // Initialize services with configuration
     const processingConfig = this.config.getProcessingConfig();
     const llmConfig = this.config.getLLMConfig();
     const storageConfig = this.config.getStorageConfig();
+    const databaseConfig = this.config.getDatabaseConfig();
     const jobsConfig = this.config.getJobsConfig();
 
-    // Initialize services
+    // Initialize database first (standalone)
+    this.database = new DatabaseManager({ dbPath: databaseConfig.path });
+
+    // Initialize other services
     this.audioProcessor = new AudioProcessor({
       tempDirectory: processingConfig.tempDirectory,
       maxDuration: processingConfig.maxDuration,
@@ -214,8 +259,9 @@ export class PodcastProcessor {
     this.llmOrchestrator = new LLMOrchestrator(llmConfig);
     this.storageManager = new StorageManager(storageConfig);
     this.rssProcessor = new RSSProcessor();
-
-    this.jobManager = new JobManager(jobsConfig);
+    
+    // Initialize job manager with database dependency
+    this.jobManager = new JobManager(jobsConfig, this.database);
 
     // Test connections
     console.log('Testing service connections...');
@@ -225,47 +271,27 @@ export class PodcastProcessor {
       throw new Error('Failed to connect to storage');
     }
     console.log('✓ Storage connection successful');
-
     console.log('✓ All services initialized');
   }
 
   private setupCronJobs(): void {
     console.log('Setting up scheduled tasks...');
 
-    // Process all podcasts every hour
     const processAllTask = cron.schedule('0 * * * *', async () => {
       console.log('Scheduled podcast processing started');
       await this.processAllPodcasts();
-    }, {
-      scheduled: false
-    });
+    }, { scheduled: false });
 
-    // Cleanup old files daily at 2 AM
     const cleanupTask = cron.schedule('0 2 * * *', async () => {
       console.log('Scheduled cleanup started');
-      await this.cleanupOldFiles();
-    }, {
-      scheduled: false
-    });
+      await this.jobManager.addCleanupJob(30);
+    }, { scheduled: false });
 
-    // Retry failed jobs every 30 minutes
-    const retryTask = cron.schedule('*/30 * * * *', async () => {
-      console.log('Retrying failed jobs...');
-      const retriedCount = await this.jobManager.retryFailedJobs();
-      console.log(`Retried ${retriedCount} failed jobs`);
-    }, {
-      scheduled: false
-    });
-
-    // Start all tasks
     processAllTask.start();
     cleanupTask.start();
-    retryTask.start();
 
-    // Store references
     this.cronJobs.set('processAll', processAllTask);
     this.cronJobs.set('cleanup', cleanupTask);
-    this.cronJobs.set('retry', retryTask);
 
     console.log('✓ Scheduled tasks configured');
   }
@@ -282,20 +308,26 @@ export class PodcastProcessor {
     // await this.notifyError(error, podcastId);
   }
 
-  private getLastProcessedTime(podcastId: string): Date {
-    // In a real implementation, this would read from SQLite
-    const defaultTime = new Date();
-    defaultTime.setHours(defaultTime.getHours() - 24);
-    return defaultTime;
-  }
+  private async generateAndUploadRSSFeed(podcastId: string): Promise<void> {
+    try {
+      const podcast = await this.config.getPodcast(podcastId);
+      if (!podcast) return;
 
-  private setLastProcessedTime(podcastId: string, time: Date): void {
-    // In a real implementation, this would write to SQLite
-    console.log(`Last processed time for ${podcastId}: ${time.toISOString()}`);
-  }
-
-  private getLastGlobalProcessingTime(): Date | null {
-    // In a real implementation, this would read from SQLite
-    return null;
+      // Get original feed
+      const originalFeed = await this.rssProcessor.fetchFeed(podcast.rssUrl);
+      
+      // Get processing results from database
+      const processingResults = await this.database.getProcessingResults(podcastId);
+      
+      // Generate processed RSS feed
+      const processedFeedXML = await this.rssProcessor.generateProcessedFeed(originalFeed, processingResults);
+      
+      // Upload to storage
+      const uploadResult = await this.storageManager.uploadRSSFeed(podcastId, processedFeedXML);
+      
+      console.log(`RSS feed uploaded: ${uploadResult.url}`);
+    } catch (error) {
+      console.error(`Failed to generate RSS feed for ${podcastId}:`, error);
+    }
   }
 }

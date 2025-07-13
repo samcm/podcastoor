@@ -1,6 +1,12 @@
-import { Job } from 'bullmq';
 import { ProcessingResult } from '@podcastoor/shared';
-import { PodcastJobData } from '../JobManager.js';
+import { PodcastJobData } from '../JobManager';
+
+interface MockJob {
+  id: number;
+  data: PodcastJobData;
+  updateProgress(percentage: number): Promise<void>;
+  attemptsMade: number;
+}
 
 export class PodcastWorker {
   constructor(
@@ -10,10 +16,10 @@ export class PodcastWorker {
     private rssProcessor: any // Would be RSSProcessor
   ) {}
 
-  async processPodcastEpisode(job: Job<PodcastJobData>): Promise<ProcessingResult> {
-    const { podcastId, episodeId, audioUrl } = job.data;
+  async processPodcastEpisode(job: MockJob): Promise<ProcessingResult> {
+    const { podcastId, episodeGuid, audioUrl } = job.data;
     
-    console.log(`PodcastWorker processing: ${podcastId}/${episodeId}`);
+    console.log(`PodcastWorker processing: ${podcastId}/${episodeGuid}`);
     
     try {
       // Stage 1: Download audio
@@ -51,16 +57,16 @@ export class PodcastWorker {
       
       const result: ProcessingResult = {
         podcastId,
-        episodeId,
+        episodeId: episodeGuid,
         originalUrl: audioUrl,
-        processedUrl: `https://storage.example.com/processed/${podcastId}/${episodeId}.mp3`,
+        processedUrl: `https://storage.example.com/processed/${podcastId}/${episodeGuid}.mp3`,
         adsRemoved: [],
         chapters: [],
         processingCost: 0.05,
         processedAt: new Date()
       };
       
-      console.log(`Episode processing completed: ${podcastId}/${episodeId}`);
+      console.log(`Episode processing completed: ${podcastId}/${episodeGuid}`);
       return result;
     } catch (error) {
       await this.handleProcessingError(error as Error, job);
@@ -68,14 +74,14 @@ export class PodcastWorker {
     }
   }
 
-  private async handleProcessingError(error: Error, job: Job<PodcastJobData>): Promise<void> {
+  private async handleProcessingError(error: Error, job: MockJob): Promise<void> {
     console.error(`Processing error for job ${job.id}:`, error.message);
     
     // Log error details
     const errorDetails = {
       jobId: job.id,
       podcastId: job.data.podcastId,
-      episodeId: job.data.episodeId,
+      episodeId: job.data.episodeGuid,
       error: error.message,
       stack: error.stack,
       attempt: job.attemptsMade,

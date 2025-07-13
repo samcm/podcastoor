@@ -1,12 +1,16 @@
 {
-  "extends": "../shared/tsconfig.json",
   "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "declaration": true,
     "outDir": "dist",
     "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["src/**/*"],
-  "references": [
-    { "path": "../shared" }
-  ]
+  "include": ["src/**/*"]
 }

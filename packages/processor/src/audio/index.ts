@@ -1,3 +1,3 @@
-export { AudioProcessor } from './AudioProcessor.js';
-export { FFmpegWrapper } from './FFmpegWrapper.js';
-export * from './types.js';
+export { AudioProcessor } from './AudioProcessor';
+export { FFmpegWrapper } from './FFmpegWrapper';
+export * from './types';

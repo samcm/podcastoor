@@ -1,1 +1,1 @@
-export { createAPIServer } from './server.js';
+export { createAPIServer } from './server';
