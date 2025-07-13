@@ -1,5 +1,8 @@
 import { Hono, Context } from 'hono';
 import { logger } from 'hono/logger';
+import { serveStatic } from '@hono/node-server/serve-static';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { PodcastProcessor } from '../PodcastProcessor';
 
 export function createAPIServer(processor: PodcastProcessor) {
@@ -150,6 +153,89 @@ export function createAPIServer(processor: PodcastProcessor) {
     }
   });
 
+  // Get recently processed episodes
+  app.get('/api/episodes/recent', async (c: Context) => {
+    try {
+      const db = processor.getDatabaseManager();
+      const recent = await db.getRecentlyProcessedEpisodes(20);
+      
+      return c.json({
+        episodes: recent,
+        count: recent.length
+      });
+    } catch (error) {
+      return c.json({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, 500);
+    }
+  });
+  
+  // Get episodes for a specific podcast
+  app.get('/api/podcasts/:podcastId/episodes', async (c: Context) => {
+    const podcastId = c.req.param('podcastId');
+    
+    try {
+      const db = processor.getDatabaseManager();
+      const episodes = await db.getEpisodesByPodcast(podcastId);
+      
+      return c.json(episodes);
+    } catch (error) {
+      return c.json({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, 500);
+    }
+  });
+  
+  // Get specific episode details
+  app.get('/api/podcasts/:podcastId/episodes/:episodeGuid', async (c: Context) => {
+    const podcastId = c.req.param('podcastId');
+    const episodeGuid = c.req.param('episodeGuid');
+    
+    try {
+      const db = processor.getDatabaseManager();
+      const episode = await db.getEpisodeByGuid(podcastId, episodeGuid);
+      
+      if (!episode) {
+        return c.json({ error: 'Episode not found' }, 404);
+      }
+      
+      // Get processing result if available
+      if (episode.status === 'completed' && episode.processedUrl) {
+        const results = await db.getProcessingResults(podcastId);
+        const result = results.find(r => r.episodeId === episodeGuid);
+        if (result) {
+          return c.json({
+            ...episode,
+            adsRemoved: result.adsRemoved?.length || 0,
+            chapters: result.chapters?.length || 0
+          });
+        }
+      }
+      
+      return c.json(episode);
+    } catch (error) {
+      return c.json({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, 500);
+    }
+  });
+  
+  // Get podcast stats
+  app.get('/api/podcasts/:podcastId/stats', async (c: Context) => {
+    const podcastId = c.req.param('podcastId');
+    
+    try {
+      const db = processor.getDatabaseManager();
+      const stats = await db.getPodcastStats(podcastId);
+      
+      return c.json(stats);
+    } catch (error) {
+      return c.json({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, 500);
+    }
+  });
+  
   // RSS Feed Endpoints
   
   // Serve RSS feed directly
@@ -158,15 +244,12 @@ export function createAPIServer(processor: PodcastProcessor) {
     
     try {
       const storageManager = processor.getStorageManager();
-      const rssFeedUrl = await storageManager.getRSSFeedUrl(podcastId);
+      const rssContent = await storageManager.getRSSFeedContent(podcastId);
       
-      // Fetch the RSS content and serve it with proper content type
-      const response = await fetch(rssFeedUrl);
-      if (!response.ok) {
+      if (!rssContent) {
         return c.text('RSS feed not found', 404);
       }
       
-      const rssContent = await response.text();
       c.header('Content-Type', 'application/rss+xml; charset=utf-8');
       c.header('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
       return c.text(rssContent);
@@ -218,7 +301,7 @@ export function createAPIServer(processor: PodcastProcessor) {
         return c.json({ error: 'Podcast not found' }, 404);
       }
       
-      const episodes = db.getEpisodesByPodcast(podcastId);
+      const episodes = await db.getEpisodesByPodcast(podcastId);
       const processedCount = episodes.filter(ep => ep.processedUrl).length;
       
       return c.json({
@@ -236,143 +319,43 @@ export function createAPIServer(processor: PodcastProcessor) {
     }
   });
   
-  // Simple landing page
-  app.get('/', async (c: Context) => {
-    try {
-      const db = processor.getDatabaseManager();
-      const podcasts = db.getAllPodcasts();
-      const baseUrl = c.req.url.replace(/\/$/, '');
+  // Serve static files for the web UI
+  const staticPath = '/app/packages/web/dist';
+  
+  if (existsSync(staticPath)) {
+    console.log(`Serving static files from: ${staticPath}`);
+    
+    // Serve assets
+    app.get('/assets/*', async (c) => {
+      const path = c.req.path.replace('/assets/', '');
+      const filePath = join(staticPath, 'assets', path);
       
-      const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Podcastoor - Ad-Free Podcast RSS Feeds</title>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      max-width: 800px;
-      margin: 0 auto;
-      padding: 2rem;
-      background: #f5f5f5;
-    }
-    .container {
-      background: white;
-      padding: 2rem;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    h1 {
-      color: #333;
-      margin-bottom: 0.5rem;
-    }
-    .subtitle {
-      color: #666;
-      margin-bottom: 2rem;
-    }
-    .podcast {
-      padding: 1rem;
-      border: 1px solid #eee;
-      border-radius: 4px;
-      margin-bottom: 1rem;
-    }
-    .podcast h3 {
-      margin: 0 0 0.5rem 0;
-      color: #333;
-    }
-    .podcast-info {
-      color: #666;
-      font-size: 0.9rem;
-      margin-bottom: 0.5rem;
-    }
-    .feed-url {
-      background: #f0f0f0;
-      padding: 0.5rem;
-      border-radius: 4px;
-      font-family: monospace;
-      font-size: 0.85rem;
-      word-break: break-all;
-      margin: 0.5rem 0;
-    }
-    .copy-button {
-      background: #007bff;
-      color: white;
-      border: none;
-      padding: 0.25rem 0.75rem;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 0.85rem;
-    }
-    .copy-button:hover {
-      background: #0056b3;
-    }
-    .stats {
-      background: #f8f9fa;
-      padding: 1rem;
-      border-radius: 4px;
-      margin-bottom: 2rem;
-    }
-    .no-podcasts {
-      text-align: center;
-      color: #666;
-      padding: 2rem;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>🎙️ Podcastoor</h1>
-    <p class="subtitle">Self-hosted ad-free podcast RSS feeds with AI-powered enhancements</p>
+      if (existsSync(filePath)) {
+        const { readFileSync } = await import('fs');
+        const content = readFileSync(filePath);
+        
+        if (path.endsWith('.css')) {
+          c.header('Content-Type', 'text/css');
+        } else if (path.endsWith('.js')) {
+          c.header('Content-Type', 'application/javascript');
+        }
+        
+        return c.body(content);
+      }
+      return c.notFound();
+    });
     
-    <div class="stats">
-      <strong>${podcasts.length}</strong> podcast${podcasts.length !== 1 ? 's' : ''} available
-    </div>
-    
-    ${podcasts.length === 0 ? 
-      '<div class="no-podcasts">No podcasts added yet. Use the API to add podcasts.</div>' :
-      podcasts.map(podcast => {
-        const episodes = db.getEpisodesByPodcast(podcast.id);
-        const processedCount = episodes.filter(ep => ep.processedUrl).length;
-        return `
-          <div class="podcast">
-            <h3>${podcast.title}</h3>
-            <div class="podcast-info">
-              ${processedCount}/${episodes.length} episodes processed
-            </div>
-            <div class="feed-url">
-              ${baseUrl}/rss/${podcast.id}
-              <button class="copy-button" onclick="navigator.clipboard.writeText('${baseUrl}/rss/${podcast.id}')">
-                Copy
-              </button>
-            </div>
-          </div>
-        `;
-      }).join('')
-    }
-    
-    <hr style="margin: 2rem 0; border: none; border-top: 1px solid #eee;">
-    
-    <h3>API Endpoints</h3>
-    <ul>
-      <li><code>GET /api/podcasts</code> - List all podcasts</li>
-      <li><code>GET /api/podcasts/:id</code> - Get podcast details</li>
-      <li><code>GET /rss/:id</code> - Get processed RSS feed</li>
-      <li><code>POST /api/process</code> - Process a new podcast</li>
-      <li><code>GET /api/stats</code> - Get processing statistics</li>
-    </ul>
-  </div>
-</body>
-</html>
-      `;
-      
-      c.header('Content-Type', 'text/html; charset=utf-8');
-      return c.html(html);
-    } catch (error) {
-      return c.text('Error loading podcasts', 500);
-    }
-  });
+    // Serve index.html for all non-API routes
+    app.get('*', async (c) => {
+      const indexPath = join(staticPath, 'index.html');
+      if (existsSync(indexPath)) {
+        const { readFileSync } = await import('fs');
+        const html = readFileSync(indexPath, 'utf-8');
+        return c.html(html);
+      }
+      return c.text('Web UI not found', 404);
+    });
+  }
   
   return app;
 }

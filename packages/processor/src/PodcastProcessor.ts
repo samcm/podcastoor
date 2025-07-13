@@ -127,6 +127,9 @@ export class PodcastProcessor {
       const feed = await this.rssProcessor.fetchFeed(podcast.rssUrl);
       console.log(`Fetched RSS feed: ${feed.title} (${feed.episodes.length} episodes)`);
 
+      // Save/update podcast information in database
+      await this.database.savePodcast(podcastId, feed.title, feed.description, podcast.rssUrl);
+
       // Calculate retention cutoff date
       const retentionDays = podcast.retentionDays || this.config.getProcessingConfig().defaultRetentionDays;
       const cutoffDate = new Date();
@@ -335,6 +338,10 @@ export class PodcastProcessor {
     } catch (error) {
       console.error(`Failed to generate RSS feed for ${podcastId}:`, error);
     }
+  }
+
+  getDatabaseManager(): DatabaseManager {
+    return this.database;
   }
 
   getStorageManager(): StorageManager {

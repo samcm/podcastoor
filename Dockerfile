@@ -18,6 +18,7 @@ WORKDIR /app
 COPY package.json pnpm-workspace.yaml ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/processor/package.json ./packages/processor/
+COPY packages/web/package.json ./packages/web/
 
 # Install dependencies (no lockfile since we're updating deps)
 RUN pnpm install
@@ -25,6 +26,7 @@ RUN pnpm install
 # Copy all source code
 COPY packages/shared ./packages/shared
 COPY packages/processor ./packages/processor
+COPY packages/web ./packages/web
 COPY turbo.json ./
 COPY config/ ./config/
 
@@ -54,6 +56,7 @@ WORKDIR /app
 COPY package.json pnpm-workspace.yaml ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/processor/package.json ./packages/processor/
+COPY packages/web/package.json ./packages/web/
 
 # Install only production dependencies
 RUN pnpm install --prod
@@ -61,6 +64,7 @@ RUN pnpm install --prod
 # Copy built application
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/packages/processor/dist ./packages/processor/dist
+COPY --from=builder /app/packages/web/dist ./packages/web/dist
 COPY --from=builder /app/config ./config
 
 # Create necessary directories

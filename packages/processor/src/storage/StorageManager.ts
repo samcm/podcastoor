@@ -184,6 +184,31 @@ export class StorageManager {
     return await this.getPublicUrl(key);
   }
 
+  async getRSSFeedContent(podcastId: string): Promise<string | null> {
+    const key = `rss/${podcastId}.xml`;
+    
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      });
+
+      const response = await this.s3Client.send(command);
+      
+      if (!response.Body) {
+        return null;
+      }
+
+      const content = await response.Body.transformToString();
+      return content;
+    } catch (error) {
+      if ((error as any).name === 'NoSuchKey') {
+        return null;
+      }
+      throw new Error(`Failed to retrieve RSS feed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async getProcessingArtifacts(podcastId: string, episodeId: string): Promise<ProcessingArtifacts | null> {
     const key = this.buildArtifactKey(podcastId, episodeId);
     

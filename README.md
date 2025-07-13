@@ -1,26 +1,14 @@
 # Podcastoor
 
-A cost-optimized podcast RSS proxy system that automatically removes ads, generates content chapters, and serves processed podcasts via globally cached RSS feeds.
+RSS proxy that removes ads from podcasts using AI-powered audio processing.
 
-## Architecture
-
-- **Node.js Processor**: FFmpeg integration, LLM orchestration, and background job processing
-- **Shared Library**: TypeScript definitions, YAML schemas, and validation utilities
+## Features
+- Automatic ad detection and removal
+- Chapter generation with timestamps
+- Global RSS feed caching
+- Cost-optimized processing
 
 ## Quick Start
-
 ```bash
-# Install dependencies
-pnpm install
-
-# Build all packages
-pnpm build
-
-# Run in development mode
-pnpm dev
+docker compose up -d;
 ```
-
-## Packages
-
-- `@podcastoor/shared` - Common types and schemas
-- `@podcastoor/processor` - Main processing engine

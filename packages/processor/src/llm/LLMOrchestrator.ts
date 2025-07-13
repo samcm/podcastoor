@@ -187,14 +187,9 @@ export class LLMOrchestrator {
       // Clean up uploaded file
       try {
         if (uploadedFile.name) {
-          // Different ways to try file deletion based on API structure
-          if ('delete' in this.geminiAI.files) {
-            await (this.geminiAI.files as any).delete(uploadedFile.name);
-          } else if ('deleteFile' in this.geminiAI.files) {
-            await (this.geminiAI.files as any).deleteFile(uploadedFile.name);
-          } else {
-            console.log(`File cleanup not available in current API version: ${uploadedFile.name}`);
-          }
+          await this.geminiAI.files.delete({
+            name: uploadedFile.name
+          });
           console.log(`Cleaned up uploaded file: ${uploadedFile.name}`);
         }
       } catch (cleanupError) {
@@ -216,6 +211,8 @@ export class LLMOrchestrator {
       
       const inputCost = (inputTokens / 1_000_000) * inputRate;
       const outputCost = (outputTokens / 1_000_000) * outputRate;
+
+      console.log(`Initial gemini cost: Input: ${inputCost}, Output: ${outputCost}`)
       
       this.recordUsage(inputTokens, outputTokens, duration, inputCost + outputCost);
       
@@ -278,6 +275,7 @@ export class LLMOrchestrator {
       );
       
       console.log(`Ad detection refinement completed: ${audioAnalysis.adsDetected.length} -> ${finalAds.length} ads`);
+      console.log(`Ad redefinition cost: ${cost}`)
       return finalAds;
     } catch (error) {
       console.error('OpenRouter ad refinement failed, using Gemini results:', error);
@@ -304,7 +302,7 @@ export class LLMOrchestrator {
             content: this.createChapterGenerationPrompt(audioAnalysis, finalAds)
           }
         ],
-        temperature: this.config.temperature + 0.2,
+        temperature: this.config.temperature,
         max_tokens: this.config.maxTokens,
         // @ts-ignore - OpenRouter specific parameter
         include: ['usage'],
@@ -334,6 +332,8 @@ export class LLMOrchestrator {
       );
       
       console.log(`Generated ${chapters.length} chapters`);
+      console.log(`Chapter generation cost: ${cost}`)
+
       return chapters;
     } catch (error) {
       throw new Error(`Chapter generation failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -384,6 +384,8 @@ export class LLMOrchestrator {
         duration, 
         cost
       );
+
+      console.log(`Description redefinition cost: ${cost}`)
       
       return enhanced;
     } catch (error) {
@@ -668,10 +670,10 @@ Make it engaging while noting the ad removal and chapters naturally.`;
 
     this.totalUsage.inputTokens += inputTokens;
     this.totalUsage.outputTokens += outputTokens;
-    this.totalUsage.cost += cost;
+    this.totalUsage.cost += cost || 0;
     this.totalUsage.duration += duration;
 
-    console.log(`LLM usage: ${inputTokens}+${outputTokens} tokens, $${cost.toFixed(4)}, ${duration}ms`);
+    console.log(`LLM usage: ${inputTokens}+${outputTokens} tokens, $${(cost || 0).toFixed(4)}, ${duration}ms`);
   }
 
   getTotalUsage(): LLMUsage {

@@ -46,6 +46,17 @@ export interface PodcastState {
   updatedAt: Date;
 }
 
+export interface PodcastInfo {
+  id: string;
+  title: string;
+  description?: string;
+  feedUrl: string;
+  lastProcessed?: Date;
+  lastRSSFetch?: Date;
+  totalEpisodes: number;
+  processedEpisodes: number;
+}
+
 export class DatabaseManager {
   private db: Database.Database;
 
@@ -317,6 +328,20 @@ export class DatabaseManager {
 
   // ========== PODCAST STATE ==========
 
+  async savePodcast(podcastId: string, title: string, description: string | undefined, feedUrl: string): Promise<void> {
+    const stmt = this.db.prepare(`
+      INSERT INTO podcasts (podcast_id, title, description, feed_url, created_at, updated_at)
+      VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+      ON CONFLICT(podcast_id) DO UPDATE SET
+        title = excluded.title,
+        description = excluded.description,
+        feed_url = excluded.feed_url,
+        updated_at = datetime('now')
+    `);
+
+    stmt.run(podcastId, title, description || null, feedUrl);
+  }
+
   async updatePodcastState(podcastId: string, updates: Partial<PodcastState>): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT INTO podcast_state (
@@ -355,6 +380,129 @@ export class DatabaseManager {
       totalEpisodes: row.total_episodes,
       processedEpisodes: row.processed_episodes,
       updatedAt: new Date(row.updated_at)
+    };
+  }
+
+  getAllPodcasts(): PodcastInfo[] {
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT 
+        p.podcast_id as id,
+        p.title,
+        p.description,
+        p.feed_url,
+        ps.last_processed,
+        ps.last_rss_fetch,
+        ps.total_episodes,
+        ps.processed_episodes
+      FROM podcasts p
+      LEFT JOIN podcast_state ps ON p.podcast_id = ps.podcast_id
+      ORDER BY p.created_at DESC
+    `);
+
+    const rows = stmt.all() as any[];
+    return rows.map(row => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      feedUrl: row.feed_url,
+      lastProcessed: row.last_processed ? new Date(row.last_processed) : undefined,
+      lastRSSFetch: row.last_rss_fetch ? new Date(row.last_rss_fetch) : undefined,
+      totalEpisodes: row.total_episodes || 0,
+      processedEpisodes: row.processed_episodes || 0
+    }));
+  }
+
+  async getRecentlyProcessedEpisodes(limit: number = 20): Promise<StoredEpisode[]> {
+    const stmt = this.db.prepare(`
+      SELECT e.*, p.title as podcast_title
+      FROM episodes e
+      JOIN podcasts p ON e.podcast_id = p.podcast_id
+      WHERE e.status = 'completed' AND e.processed_at IS NOT NULL
+      ORDER BY e.processed_at DESC
+      LIMIT ?
+    `);
+
+    const rows = stmt.all(limit) as any[];
+    return rows.map(row => ({
+      ...this.mapRowToEpisode(row),
+      podcastTitle: row.podcast_title
+    }));
+  }
+
+  async getEpisodeByGuid(podcastId: string, episodeGuid: string): Promise<StoredEpisode | null> {
+    const stmt = this.db.prepare(`
+      SELECT * FROM episodes 
+      WHERE podcast_id = ? AND episode_guid = ?
+    `);
+
+    const row = stmt.get(podcastId, episodeGuid) as any;
+    return row ? this.mapRowToEpisode(row) : null;
+  }
+
+  async getPodcastStats(podcastId: string): Promise<{
+    totalAdsRemoved: number;
+    totalCost: number;
+    totalDuration: number;
+    averageAdsPerEpisode: number;
+  }> {
+    // Get total ads removed
+    const adsStmt = this.db.prepare(`
+      SELECT COUNT(*) as count
+      FROM ad_detections ad
+      JOIN processing_results pr ON ad.result_id = pr.id
+      WHERE pr.podcast_id = ?
+    `);
+    const adsResult = adsStmt.get(podcastId) as any;
+
+    // Get total cost and episode count
+    const costStmt = this.db.prepare(`
+      SELECT 
+        SUM(processing_cost) as total_cost,
+        COUNT(*) as episode_count,
+        SUM(duration) as total_duration
+      FROM episodes
+      WHERE podcast_id = ? AND status = 'completed'
+    `);
+    const costResult = costStmt.get(podcastId) as any;
+
+    return {
+      totalAdsRemoved: adsResult?.count || 0,
+      totalCost: costResult?.total_cost || 0,
+      totalDuration: costResult?.total_duration || 0,
+      averageAdsPerEpisode: costResult?.episode_count > 0 
+        ? (adsResult?.count || 0) / costResult.episode_count 
+        : 0
+    };
+  }
+
+  getPodcast(podcastId: string): PodcastInfo | null {
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT 
+        p.podcast_id as id,
+        p.title,
+        p.description,
+        p.feed_url,
+        ps.last_processed,
+        ps.last_rss_fetch,
+        ps.total_episodes,
+        ps.processed_episodes
+      FROM podcasts p
+      LEFT JOIN podcast_state ps ON p.podcast_id = ps.podcast_id
+      WHERE p.podcast_id = ?
+    `);
+
+    const row = stmt.get(podcastId) as any;
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      feedUrl: row.feed_url,
+      lastProcessed: row.last_processed ? new Date(row.last_processed) : undefined,
+      lastRSSFetch: row.last_rss_fetch ? new Date(row.last_rss_fetch) : undefined,
+      totalEpisodes: row.total_episodes || 0,
+      processedEpisodes: row.processed_episodes || 0
     };
   }
 
@@ -443,6 +591,15 @@ export class DatabaseManager {
     this.db.exec(`
       PRAGMA foreign_keys = ON;
       
+      CREATE TABLE IF NOT EXISTS podcasts (
+        podcast_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        feed_url TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
       CREATE TABLE IF NOT EXISTS episodes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         podcast_id TEXT NOT NULL,
@@ -459,7 +616,8 @@ export class DatabaseManager {
         failure_reason TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE(podcast_id, episode_guid)
+        UNIQUE(podcast_id, episode_guid),
+        FOREIGN KEY(podcast_id) REFERENCES podcasts(podcast_id)
       );
 
       CREATE TABLE IF NOT EXISTS processing_results (

@@ -54,6 +54,7 @@ async function main() {
     });
     
     console.log(`Processor is running. HTTP server available at http://localhost:${port}`);
+    console.log(`Web UI: http://localhost:${port}/`);
     console.log(`Health check: http://localhost:${port}/health`);
     console.log('Press Ctrl+C to stop.');
     
