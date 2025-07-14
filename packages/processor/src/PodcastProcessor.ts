@@ -347,4 +347,12 @@ export class PodcastProcessor {
   getStorageManager(): StorageManager {
     return this.storageManager;
   }
+
+  getJobManager(): JobManager {
+    return this.jobManager;
+  }
+
+  getNewDatabaseService(): DatabaseManager {
+    return this.database;
+  }
 }

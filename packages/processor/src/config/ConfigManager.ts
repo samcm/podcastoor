@@ -73,7 +73,9 @@ export class ConfigManager {
   private changeCallbacks: Set<(config: AppConfig) => void> = new Set();
 
   constructor(configPath: string) {
-    this.configFilePath = join(configPath, 'config.yaml');
+    // Support CONFIG_FILE env var for specifying a different config file
+    const configFile = process.env.CONFIG_FILE || 'config.yaml';
+    this.configFilePath = join(configPath, configFile);
     this.config = this.loadConfig();
   }
 

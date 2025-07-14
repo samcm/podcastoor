@@ -32,6 +32,7 @@ export const ChapterSchema = z.object({
 });
 
 export const ProcessingResultSchema = z.object({
+  id: z.number().optional(),
   podcastId: z.string().min(1),
   episodeId: z.string().min(1),
   originalUrl: z.string().url(),

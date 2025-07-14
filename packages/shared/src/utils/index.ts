@@ -8,16 +8,10 @@ export function validateConfig<T>(schema: z.ZodSchema<T>, data: unknown): T {
   return result.data;
 }
 
-export function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-  
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  }
-  return `${minutes}:${secs.toString().padStart(2, '0')}`;
-}
+// Export new shared utilities
+export * from './errors';
+export * from './time';
+export * from './validation';
 
 export function formatFileSize(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB'];

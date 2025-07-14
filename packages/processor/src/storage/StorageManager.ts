@@ -55,6 +55,11 @@ export class StorageManager {
     });
   }
 
+  async uploadAudioFile(podcastId: string, episodeGuid: string, filePath: string): Promise<string> {
+    const result = await this.uploadAudio(filePath, podcastId, episodeGuid);
+    return result.url;
+  }
+
   async uploadAudio(filePath: string, podcastId: string, episodeId: string): Promise<UploadResult> {
     const fileName = basename(filePath);
     const key = this.buildS3Key(podcastId, episodeId, fileName);
@@ -452,6 +457,37 @@ export class StorageManager {
 
   getEndpoint(): string {
     return this.config.endpoint;
+  }
+
+  async deleteProcessedFiles(podcastId: string, episodeId: string): Promise<void> {
+    console.log(`Deleting processed files for ${podcastId}/${episodeId}`);
+    
+    try {
+      // List all files for this episode
+      const prefix = `podcasts/${podcastId}`;
+      const command = new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: prefix
+      });
+
+      const response = await this.s3Client.send(command);
+      
+      if (response.Contents) {
+        const episodeFiles = response.Contents.filter(obj => 
+          obj.Key && obj.Key.includes(episodeId.replace(/[^a-zA-Z0-9-_]/g, '-'))
+        );
+        
+        for (const file of episodeFiles) {
+          if (file.Key) {
+            await this.deleteAudio(file.Key);
+          }
+        }
+        
+        console.log(`Deleted ${episodeFiles.length} files for episode ${episodeId}`);
+      }
+    } catch (error) {
+      throw new Error(`Failed to delete processed files: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async testConnection(): Promise<boolean> {

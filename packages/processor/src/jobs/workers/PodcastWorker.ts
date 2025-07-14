@@ -1,4 +1,4 @@
-import { ProcessingResult, AdDetection, Chapter, ProcessingArtifacts } from '@podcastoor/shared';
+import { AdDetection, Chapter, ProcessingArtifacts, ProcessingResult } from '@podcastoor/shared';
 import { PodcastJobData } from '../JobManager';
 import { AudioProcessor } from '../../audio/AudioProcessor';
 import { LLMOrchestrator } from '../../llm/LLMOrchestrator';
@@ -34,9 +34,8 @@ export class PodcastWorker {
       console.log(`⬇️  Stage 1/8: Downloading audio from ${audioUrl}`);
       const downloadStartTime = Date.now();
       
-      const audioFileName = `${episodeGuid}-${randomUUID()}.mp3`;
-      const audioPath = join(this.audioProcessor['tempDirectory'], audioFileName);
-      const audioMetadata = await this.audioProcessor.downloadAudio(audioUrl, audioPath);
+      const audioPath = await this.audioProcessor.downloadAudio(audioUrl, episodeGuid);
+      const audioMetadata = await this.audioProcessor.extractMetadata(audioPath);
       
       const downloadTime = Date.now() - downloadStartTime;
       console.log(`✅ Audio downloaded (${(downloadTime / 1000).toFixed(1)}s): ${audioMetadata.duration}s duration, ${(audioMetadata.size / 1024 / 1024).toFixed(1)}MB`);
@@ -87,8 +86,7 @@ export class PodcastWorker {
       console.log(`✂️  Stage 5/8: Processing audio (removing ${finalAds.length} ad segments)...`);
       const audioProcessingStartTime = Date.now();
       
-      const processedPath = join(this.audioProcessor['tempDirectory'], `processed-${audioFileName}`);
-      await this.audioProcessor.removeAds(audioPath, processedPath, finalAds);
+      const processedPath = await this.audioProcessor.removeAds(audioPath, finalAds);
       
       // Get metadata of processed file
       const processedMetadata = await this.audioProcessor.extractMetadata(processedPath);

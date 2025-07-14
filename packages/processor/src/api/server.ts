@@ -1,5 +1,6 @@
 import { Hono, Context } from 'hono';
 import { logger } from 'hono/logger';
+import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -7,6 +8,14 @@ import { PodcastProcessor } from '../PodcastProcessor';
 
 export function createAPIServer(processor: PodcastProcessor) {
   const app = new Hono();
+
+  // Enable CORS for development
+  if (process.env.NODE_ENV === 'development') {
+    app.use('*', cors({
+      origin: 'http://localhost:5173',
+      credentials: true,
+    }));
+  }
 
   app.use('*', logger());
 
@@ -169,6 +178,24 @@ export function createAPIServer(processor: PodcastProcessor) {
       }, 500);
     }
   });
+
+  // New manual job endpoints for refactored schema (temporarily disabled until integration is complete)
+  /*
+  app.post('/api/jobs', async (c: Context) => {
+    // Implementation will be added after PodcastProcessor integration
+    return c.json({ error: 'Manual job creation not yet available' }, 503);
+  });
+  
+  app.get('/api/episodes/:episodeGuid', async (c: Context) => {
+    // Implementation will be added after PodcastProcessor integration
+    return c.json({ error: 'Episode lookup by GUID not yet available' }, 503);
+  });
+  
+  app.get('/audio/:episodeGuid', async (c: Context) => {
+    // Implementation will be added after PodcastProcessor integration
+    return c.json({ error: 'Audio proxy not yet available' }, 503);
+  });
+  */
   
   // Get episodes for a specific podcast
   app.get('/api/podcasts/:podcastId/episodes', async (c: Context) => {

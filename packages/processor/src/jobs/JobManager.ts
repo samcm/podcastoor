@@ -1,10 +1,12 @@
 import { DatabaseManager } from '../database/DatabaseManager';
+import { DatabaseService } from '../services/database';
 import { ProcessingResult } from '@podcastoor/shared';
 import { PodcastWorker } from './workers/PodcastWorker';
 import { AudioProcessor } from '../audio/AudioProcessor';
 import { LLMOrchestrator } from '../llm/LLMOrchestrator';
 import { StorageManager } from '../storage/StorageManager';
 import { RSSProcessor } from '../rss/RSSProcessor';
+import { formatError } from '@podcastoor/shared';
 
 export interface JobConfig {
   concurrency: number;
@@ -26,11 +28,13 @@ export interface CleanupJobData {
 
 export class JobManager {
   private db: DatabaseManager;
+  private newDb?: DatabaseService; // New database service for refactored schema
   private config: JobConfig;
   private isRunning: boolean = false;
   private processingInterval?: NodeJS.Timeout;
   private podcastWorker: PodcastWorker;
   private runningJobsCount: number = 0;
+  private storageManager: StorageManager;
 
   constructor(
     config: JobConfig, 
@@ -38,10 +42,13 @@ export class JobManager {
     audioProcessor: AudioProcessor,
     llmOrchestrator: LLMOrchestrator,
     storageManager: StorageManager,
-    rssProcessor: RSSProcessor
+    rssProcessor: RSSProcessor,
+    newDatabase?: DatabaseService
   ) {
     this.config = config;
     this.db = database;
+    this.newDb = newDatabase;
+    this.storageManager = storageManager;
     this.podcastWorker = new PodcastWorker(
       audioProcessor,
       llmOrchestrator,
@@ -118,6 +125,60 @@ export class JobManager {
     console.log(`Added cleanup job: ${olderThanDays} days${dryRun ? ' (dry run)' : ''} (ID: ${jobId})`);
     
     return jobId;
+  }
+
+  // New manual job creation methods for refactored schema
+  async createManualJob(episodeGuid: string, podcastId: string, priority: number = 10): Promise<number> {
+    if (!this.newDb) {
+      throw new Error('New database service not available for manual job creation');
+    }
+
+    try {
+      // Verify episode exists
+      const episode = await this.newDb.getUpstreamEpisode(episodeGuid, podcastId);
+      if (!episode) {
+        throw new Error(`Episode ${episodeGuid} not found`);
+      }
+      
+      // Check if job already exists
+      const existingJob = await this.newDb.getActiveJobForEpisode(episodeGuid);
+      if (existingJob) {
+        throw new Error(`Active job already exists for episode ${episodeGuid}`);
+      }
+      
+      // Create manual job with protection
+      const jobId = await this.newDb.createProcessingJob({
+        episodeGuid,
+        podcastId,
+        reason: 'manual',
+        priority,
+        isProtected: true // Immune from cleanup
+      });
+      
+      console.log(`Created manual job ${jobId} for episode ${episodeGuid}`);
+      return jobId;
+    } catch (error) {
+      console.error('Failed to create manual job:', error);
+      throw new Error(`Failed to create job: ${formatError(error)}`);
+    }
+  }
+  
+  async retryFailedJob(jobId: number): Promise<void> {
+    if (!this.newDb) {
+      throw new Error('New database service not available for job retry');
+    }
+
+    const job = await this.newDb.getJob(jobId);
+    if (!job) {
+      throw new Error(`Job ${jobId} not found`);
+    }
+    
+    if (job.status !== 'failed') {
+      throw new Error(`Job ${jobId} is not in failed state`);
+    }
+    
+    await this.newDb.resetJobStatus(jobId);
+    console.log(`Reset job ${jobId} for retry`);
   }
 
   async getQueueStats() {
@@ -255,12 +316,33 @@ export class JobManager {
   private async processCleanupJob(data: CleanupJobData): Promise<{ deletedCount: number; dryRun: boolean }> {
     console.log(`Processing cleanup: ${data.olderThanDays} days${data.dryRun ? ' (dry run)' : ''}`);
     
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    return {
-      deletedCount: data.dryRun ? 0 : Math.floor(Math.random() * 10),
-      dryRun: data.dryRun
-    };
+    if (this.newDb) {
+      // Use new database service for protected cleanup
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - data.olderThanDays);
+      
+      // Get episodes to clean (excluding protected)
+      const episodes = await this.newDb.getEpisodesForCleanup(cutoffDate);
+      
+      let cleaned = 0;
+      for (const episode of episodes) {
+        if (!data.dryRun) {
+          await this.storageManager.deleteProcessedFiles(episode.podcastId, episode.episodeGuid);
+          await this.newDb.markEpisodeCleaned(episode.episodeGuid);
+        }
+        cleaned++;
+      }
+      
+      console.log(`Cleanup ${data.dryRun ? '(dry run)' : ''}: ${cleaned} episodes`);
+      return { deletedCount: cleaned, dryRun: data.dryRun };
+    } else {
+      // Fallback to original implementation
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return {
+        deletedCount: data.dryRun ? 0 : Math.floor(Math.random() * 10),
+        dryRun: data.dryRun
+      };
+    }
   }
 
   private getRunningJobsCount(): number {

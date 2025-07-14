@@ -29,16 +29,6 @@ export interface Chapter {
   description?: string;
 }
 
-export interface ProcessingResult {
-  podcastId: string;
-  episodeId: string;
-  originalUrl: string;
-  processedUrl: string;
-  adsRemoved: AdDetection[];
-  chapters: Chapter[];
-  processingCost: number;
-  processedAt: Date;
-}
 
 export interface Episode {
   guid: string;
@@ -104,3 +94,8 @@ export interface ProcessingArtifacts {
   };
   timeSaved: number;
 }
+
+// Export new normalized schema types
+export * from './database';
+export * from './api';
+export * from './jobs';

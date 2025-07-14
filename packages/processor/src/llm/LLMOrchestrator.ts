@@ -2,7 +2,7 @@ import {
   GoogleGenAI
 } from "@google/genai";
 import OpenAI from 'openai';
-import { AdDetection, Chapter } from '@podcastoor/shared';
+import { AdDetection, Chapter, JobContext } from '@podcastoor/shared';
 import { createReadStream, promises as fs } from 'fs';
 import { basename } from 'path';
 
@@ -45,6 +45,7 @@ export class LLMOrchestrator {
   private geminiAI: GoogleGenAI;
   private openrouterClient: OpenAI;
   private config: LLMConfig;
+  private jobContext?: JobContext;
   private totalUsage: LLMUsage = {
     inputTokens: 0,
     outputTokens: 0,
@@ -64,6 +65,35 @@ export class LLMOrchestrator {
       baseURL: config.openrouterEndpoint,
       timeout: config.timeoutMs
     });
+  }
+
+  setJobContext(context: JobContext): void {
+    this.jobContext = context;
+  }
+  
+  private async recordUsage(
+    model: string,
+    operation: string,
+    usage: any,
+    durationMs: number
+  ): Promise<void> {
+    if (this.jobContext) {
+      await this.jobContext.recordLLMCost({
+        model,
+        operation,
+        inputTokens: usage?.prompt_tokens || usage?.input_tokens || 0,
+        outputTokens: usage?.completion_tokens || usage?.output_tokens || 0,
+        totalTokens: usage?.total_tokens || 0,
+        cost: usage?.total_cost || usage?.cost || 0,
+        durationMs
+      });
+    }
+    
+    // Still track in totalUsage for backward compatibility
+    this.totalUsage.inputTokens += usage?.prompt_tokens || usage?.input_tokens || 0;
+    this.totalUsage.outputTokens += usage?.completion_tokens || usage?.output_tokens || 0;
+    this.totalUsage.cost += usage?.total_cost || usage?.cost || 0;
+    this.totalUsage.duration += durationMs;
   }
 
   async analyzeAudio(audioPath: string): Promise<AudioAnalysisResult> {
@@ -214,7 +244,18 @@ export class LLMOrchestrator {
 
       console.log(`Initial gemini cost: Input: ${inputCost}, Output: ${outputCost}`)
       
-      this.recordUsage(inputTokens, outputTokens, duration, inputCost + outputCost);
+      // Record usage with new method
+      await this.recordUsage(
+        this.config.models.geminiAudio,
+        'audio_analysis',
+        {
+          prompt_tokens: inputTokens,
+          completion_tokens: outputTokens,
+          total_tokens: inputTokens + outputTokens,
+          cost: inputCost + outputCost
+        },
+        duration
+      );
       
       return parsedResult;
     } catch (error) {
@@ -267,11 +308,11 @@ export class LLMOrchestrator {
       const usage = response.usage as any;
       const cost = usage?.total_cost || undefined;
       
-      this.recordUsage(
-        usage?.prompt_tokens || 0, 
-        usage?.completion_tokens || 0, 
-        duration, 
-        cost
+      await this.recordUsage(
+        this.config.models.textAdDetection,
+        'ad_refinement',
+        usage,
+        duration
       );
       
       console.log(`Ad detection refinement completed: ${audioAnalysis.adsDetected.length} -> ${finalAds.length} ads`);
@@ -324,11 +365,11 @@ export class LLMOrchestrator {
       const usage = response.usage as any;
       const cost = usage?.total_cost || undefined;
       
-      this.recordUsage(
-        usage?.prompt_tokens || 0, 
-        usage?.completion_tokens || 0, 
-        duration, 
-        cost
+      await this.recordUsage(
+        this.config.models.chapters,
+        'chapter_generation',
+        usage,
+        duration
       );
       
       console.log(`Generated ${chapters.length} chapters`);
@@ -378,11 +419,11 @@ export class LLMOrchestrator {
       const usage = response.usage as any;
       const cost = usage?.total_cost || undefined;
       
-      this.recordUsage(
-        usage?.prompt_tokens || 0, 
-        usage?.completion_tokens || 0, 
-        duration, 
-        cost
+      await this.recordUsage(
+        this.config.models.enhancement,
+        'description_enhancement',
+        usage,
+        duration
       );
 
       console.log(`Description redefinition cost: ${cost}`)
@@ -664,17 +705,6 @@ Make it engaging while noting the ad removal and chapters naturally.`;
     return Math.ceil(text.length / 4);
   }
 
-  private recordUsage(inputTokens: number, outputTokens: number, duration: number, providedCost?: number): void {
-    // Use provided cost if available (from API), otherwise estimate
-    const cost = providedCost ?? ((inputTokens / 1000) * 0.002 + (outputTokens / 1000) * 0.004);
-
-    this.totalUsage.inputTokens += inputTokens;
-    this.totalUsage.outputTokens += outputTokens;
-    this.totalUsage.cost += cost || 0;
-    this.totalUsage.duration += duration;
-
-    console.log(`LLM usage: ${inputTokens}+${outputTokens} tokens, $${(cost || 0).toFixed(4)}, ${duration}ms`);
-  }
 
   getTotalUsage(): LLMUsage {
     return { ...this.totalUsage };

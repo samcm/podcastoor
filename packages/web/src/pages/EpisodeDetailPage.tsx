@@ -1,268 +1,218 @@
-import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
-import { api, Episode, ProcessingArtifact } from '../api/client'
+import React, { useEffect, useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { EpisodeDetails } from '@podcastoor/shared';
+import { api } from '../api/client';
+import { JobStatus } from '../components/JobStatus';
+import { MetricsDisplay } from '../components/MetricsDisplay';
+import { ChaptersList } from '../components/ChaptersList';
+import { formatTime, formatDuration } from '@podcastoor/shared';
 
 export default function EpisodeDetailPage() {
-  const { showId, episodeId } = useParams<{ showId: string, episodeId: string }>()
-  const [episode, setEpisode] = useState<Episode | null>(null)
-  const [artifacts, setArtifacts] = useState<ProcessingArtifact | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'details' | 'transcript' | 'ads' | 'chapters'>('details')
-
+  const { podcastId, episodeGuid } = useParams<{ podcastId: string; episodeGuid: string }>();
+  const [episode, setEpisode] = useState<EpisodeDetails | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('overview');
+  
   useEffect(() => {
-    if (showId && episodeId) {
-      loadData()
+    if (episodeGuid) {
+      loadEpisode();
     }
-  }, [showId, episodeId])
-
-  async function loadData() {
-    if (!showId || !episodeId) return
+  }, [episodeGuid]);
+  
+  const loadEpisode = async () => {
+    try {
+      setLoading(true);
+      const data = await api.getEpisode(episodeGuid!);
+      setEpisode(data);
+    } catch (error) {
+      console.error('Failed to load episode:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const handleProcessEpisode = async () => {
+    if (!episode?.upstream) return;
     
     try {
-      const episodeData = await api.getEpisode(showId, episodeId)
-      setEpisode(episodeData)
-      
-      if (episodeData.status === 'completed') {
-        try {
-          const artifactsData = await api.getEpisodeArtifacts(showId, episodeId)
-          setArtifacts(artifactsData)
-        } catch (err) {
-          console.error('Failed to load artifacts:', err)
-        }
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load data')
-    } finally {
-      setLoading(false)
+      const { jobId } = await api.createJob(episode.upstream.episodeGuid);
+      // Reload to show new job
+      await loadEpisode();
+    } catch (error) {
+      console.error('Failed to create job:', error);
     }
-  }
-
+  };
+  
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-gray-500">Loading...</div>
-      </div>
-    )
+    return <div className="flex justify-center items-center h-64">Loading...</div>;
   }
-
-  if (error || !episode) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-red-500">Error: {error || 'Episode not found'}</div>
-      </div>
-    )
+  
+  if (!episode?.upstream) {
+    return <div className="text-center py-8">Episode not found</div>;
   }
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    })
-  }
-
-  const formatDuration = (seconds?: number) => {
-    if (!seconds) return 'N/A'
-    const hours = Math.floor(seconds / 3600)
-    const minutes = Math.floor((seconds % 3600) / 60)
-    const secs = seconds % 60
-    return hours > 0 ? `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}` : `${minutes}:${secs.toString().padStart(2, '0')}`
-  }
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
-
-  const statusColors = {
-    pending: 'bg-gray-100 text-gray-800',
-    processing: 'bg-blue-100 text-blue-800',
-    completed: 'bg-green-100 text-green-800',
-    failed: 'bg-red-100 text-red-800'
-  }
-
+  
+  const { upstream, job, result, chapters, adRemovals, llmCosts } = episode;
+  
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto px-4 py-8">
+      {/* Header */}
       <div className="mb-8">
-        <Link to={`/shows/${showId}`} className="text-blue-600 hover:text-blue-800 mb-4 inline-block">
+        <Link to={`/shows/${podcastId}`} className="text-blue-600 hover:text-blue-800 mb-4 inline-block">
           ← Back to show
         </Link>
         
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex justify-between items-start">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">{episode.title}</h1>
-              <p className="mt-2 text-gray-600">{episode.description}</p>
-              
-              <div className="mt-4 flex items-center space-x-4 text-sm text-gray-500">
-                <span>{formatDate(episode.publishedAt)}</span>
-                <span>•</span>
-                <span>{formatDuration(episode.duration)}</span>
-                {episode.fileSize && (
-                  <>
-                    <span>•</span>
-                    <span>{(episode.fileSize / 1024 / 1024).toFixed(1)} MB</span>
-                  </>
-                )}
-              </div>
-            </div>
-            
-            <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${statusColors[episode.status]}`}>
-              {episode.status}
-            </span>
-          </div>
-          
-          <div className="mt-6 space-y-2 text-sm">
-            <p><span className="font-medium">Original URL:</span> <a href={episode.originalUrl} className="text-blue-600 hover:text-blue-800 break-all">{episode.originalUrl}</a></p>
-            {episode.processedUrl && (
-              <p><span className="font-medium">Processed URL:</span> <a href={episode.processedUrl} className="text-blue-600 hover:text-blue-800 break-all">{episode.processedUrl}</a></p>
-            )}
-            {episode.error && (
-              <p className="text-red-600"><span className="font-medium">Error:</span> {episode.error}</p>
-            )}
-          </div>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">{upstream.title}</h1>
+        
+        <div className="flex items-center space-x-4 text-sm text-gray-600">
+          <span>{new Date(upstream.publishDate).toLocaleDateString()}</span>
+          <span>•</span>
+          <span>{formatTime(upstream.duration)}</span>
+          <span>•</span>
+          <span>{(upstream.fileSize / 1024 / 1024).toFixed(1)} MB</span>
         </div>
       </div>
-
-      {episode.status === 'completed' && artifacts && (
-        <div className="bg-white rounded-lg shadow">
+      
+      {/* Job Status or Process Button */}
+      {job ? (
+        <JobStatus job={job} />
+      ) : (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 mb-8">
+          <h3 className="text-lg font-medium text-blue-900 mb-2">Process this episode</h3>
+          <p className="text-blue-700 mb-4">
+            This episode hasn't been processed yet. Click below to remove ads and generate chapters.
+          </p>
+          <button
+            onClick={handleProcessEpisode}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+          >
+            Process Episode
+          </button>
+        </div>
+      )}
+      
+      {/* Metrics (if processed) */}
+      {result && (
+        <div className="mb-8">
+          <h2 className="text-xl font-semibold mb-4">Processing Metrics</h2>
+          <MetricsDisplay result={result} costs={llmCosts} />
+        </div>
+      )}
+      
+      {/* Audio Player */}
+      <div className="bg-gray-100 rounded-lg p-6 mb-8">
+        <h2 className="text-lg font-medium mb-4">
+          {result ? 'Processed Audio' : 'Original Audio'}
+        </h2>
+        <audio 
+          controls 
+          className="w-full"
+          src={api.getAudioUrl(upstream.episodeGuid)}
+        >
+          Your browser does not support the audio element.
+        </audio>
+      </div>
+      
+      {/* Tabs for details */}
+      {result && (
+        <div>
           <div className="border-b border-gray-200">
-            <nav className="-mb-px flex">
-              <button
-                onClick={() => setActiveTab('details')}
-                className={`py-2 px-6 border-b-2 font-medium text-sm ${
-                  activeTab === 'details' 
-                    ? 'border-blue-500 text-blue-600' 
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                Details
-              </button>
-              {artifacts.transcript && (
+            <nav className="-mb-px flex space-x-8">
+              {['overview', 'chapters', 'ads', 'costs'].map((tab) => (
                 <button
-                  onClick={() => setActiveTab('transcript')}
-                  className={`py-2 px-6 border-b-2 font-medium text-sm ${
-                    activeTab === 'transcript' 
-                      ? 'border-blue-500 text-blue-600' 
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === tab
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  Transcript
+                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
                 </button>
-              )}
-              {artifacts.adsRemoved && artifacts.adsRemoved.length > 0 && (
-                <button
-                  onClick={() => setActiveTab('ads')}
-                  className={`py-2 px-6 border-b-2 font-medium text-sm ${
-                    activeTab === 'ads' 
-                      ? 'border-blue-500 text-blue-600' 
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  }`}
-                >
-                  Ads Removed ({artifacts.adsRemoved.length})
-                </button>
-              )}
-              {artifacts.chapters && artifacts.chapters.length > 0 && (
-                <button
-                  onClick={() => setActiveTab('chapters')}
-                  className={`py-2 px-6 border-b-2 font-medium text-sm ${
-                    activeTab === 'chapters' 
-                      ? 'border-blue-500 text-blue-600' 
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  }`}
-                >
-                  Chapters ({artifacts.chapters.length})
-                </button>
-              )}
+              ))}
             </nav>
           </div>
           
-          <div className="p-6">
-            {activeTab === 'details' && (
-              <div className="space-y-4">
-                {artifacts.summary && (
-                  <div>
-                    <h3 className="font-semibold text-gray-900 mb-2">Summary</h3>
-                    <p className="text-gray-600">{artifacts.summary}</p>
-                  </div>
-                )}
-                
-                {artifacts.keyTopics && artifacts.keyTopics.length > 0 && (
-                  <div>
-                    <h3 className="font-semibold text-gray-900 mb-2">Key Topics</h3>
-                    <div className="flex flex-wrap gap-2">
-                      {artifacts.keyTopics.map((topic, index) => (
-                        <span key={index} className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
-                          {topic}
+          <div className="py-6">
+            {activeTab === 'overview' && (
+              <div className="prose max-w-none">
+                <h3>Description</h3>
+                <div dangerouslySetInnerHTML={{ __html: upstream.description }} />
+              </div>
+            )}
+            
+            {activeTab === 'chapters' && (
+              <div>
+                <h3 className="text-lg font-medium mb-4">
+                  {chapters.length} Chapters Generated
+                </h3>
+                <ChaptersList chapters={chapters} />
+              </div>
+            )}
+            
+            {activeTab === 'ads' && (
+              <div>
+                <h3 className="text-lg font-medium mb-4">
+                  {adRemovals.length} Ads Removed
+                </h3>
+                <div className="space-y-2">
+                  {adRemovals.map((ad) => (
+                    <div key={ad.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div>
+                        <span className="font-mono text-sm">
+                          {formatTime(ad.startTime)} - {formatTime(ad.endTime)}
                         </span>
-                      ))}
+                        <span className="ml-3 text-sm text-gray-600">
+                          {ad.category}
+                        </span>
+                      </div>
+                      <span className="text-sm text-gray-500">
+                        {(ad.confidence * 100).toFixed(0)}% confidence
+                      </span>
                     </div>
-                  </div>
-                )}
-                
-                <div className="grid grid-cols-2 gap-4 pt-4">
-                  <div>
-                    <h4 className="font-medium text-gray-700">Ads Removed</h4>
-                    <p className="text-2xl font-bold text-gray-900">{artifacts.adsRemoved?.length || 0}</p>
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-gray-700">Chapters</h4>
-                    <p className="text-2xl font-bold text-gray-900">{artifacts.chapters?.length || 0}</p>
-                  </div>
+                  ))}
                 </div>
               </div>
             )}
             
-            {activeTab === 'transcript' && artifacts.transcript && (
-              <div className="prose max-w-none">
-                <pre className="whitespace-pre-wrap text-sm text-gray-700 bg-gray-50 p-4 rounded-lg overflow-auto max-h-96">
-                  {artifacts.transcript}
-                </pre>
-              </div>
-            )}
-            
-            {activeTab === 'ads' && artifacts.adsRemoved && (
-              <div className="space-y-4">
-                {artifacts.adsRemoved.map((ad, index) => (
-                  <div key={index} className="border rounded-lg p-4">
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="font-medium text-gray-900">
-                        {formatTime(ad.start)} - {formatTime(ad.end)}
-                      </span>
-                      <span className="text-sm text-gray-500">
-                        Confidence: {Math.round(ad.confidence * 100)}%
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-600">{ad.content}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-            
-            {activeTab === 'chapters' && artifacts.chapters && (
-              <div className="space-y-4">
-                {artifacts.chapters.map((chapter, index) => (
-                  <div key={index} className="border rounded-lg p-4">
-                    <div className="flex justify-between items-start mb-2">
-                      <h4 className="font-medium text-gray-900">{chapter.title}</h4>
-                      <span className="text-sm text-gray-500">
-                        {formatTime(chapter.start)} - {formatTime(chapter.end)}
-                      </span>
-                    </div>
-                    {chapter.description && (
-                      <p className="text-sm text-gray-600">{chapter.description}</p>
-                    )}
-                  </div>
-                ))}
+            {activeTab === 'costs' && (
+              <div>
+                <h3 className="text-lg font-medium mb-4">LLM Cost Breakdown</h3>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead>
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Operation</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Model</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tokens</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cost</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {llmCosts.map((cost) => (
+                        <tr key={cost.id}>
+                          <td className="px-6 py-4 text-sm">{cost.operation}</td>
+                          <td className="px-6 py-4 text-sm">{cost.model}</td>
+                          <td className="px-6 py-4 text-sm">{cost.totalTokens.toLocaleString()}</td>
+                          <td className="px-6 py-4 text-sm">{formatDuration(cost.durationMs)}</td>
+                          <td className="px-6 py-4 text-sm">${cost.cost.toFixed(4)}</td>
+                        </tr>
+                      ))}
+                      <tr className="bg-gray-50 font-medium">
+                        <td colSpan={4} className="px-6 py-4 text-sm">Total</td>
+                        <td className="px-6 py-4 text-sm">
+                          ${llmCosts.reduce((sum, c) => sum + c.cost, 0).toFixed(4)}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>
         </div>
       )}
     </div>
-  )
+  );
 }

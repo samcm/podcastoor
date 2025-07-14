@@ -27,7 +27,13 @@ export class AudioProcessor {
     this.timeoutMs = options.timeoutMs || 3600000; // 1 hour
   }
 
-  async downloadAudio(url: string, outputPath: string): Promise<AudioMetadata> {
+  async downloadAudio(url: string, episodeGuid: string): Promise<string> {
+    const outputPath = join(this.tempDirectory, `${episodeGuid}_original.mp3`);
+    await this.downloadAudioToPath(url, outputPath);
+    return outputPath;
+  }
+
+  async downloadAudioToPath(url: string, outputPath: string): Promise<AudioMetadata> {
     await this.ensureDirectoryExists(dirname(outputPath));
 
     const args = [
@@ -49,7 +55,13 @@ export class AudioProcessor {
     }
   }
 
-  async removeAds(inputPath: string, outputPath: string, ads: AdDetection[]): Promise<void> {
+  async removeAds(inputPath: string, ads: AdDetection[]): Promise<string> {
+    const outputPath = inputPath.replace('_original.mp3', '_processed.mp3');
+    await this.removeAdsToPath(inputPath, outputPath, ads);
+    return outputPath;
+  }
+
+  async removeAdsToPath(inputPath: string, outputPath: string, ads: AdDetection[]): Promise<void> {
     if (ads.length === 0) {
       // No ads to remove, just copy the file
       await fs.copyFile(inputPath, outputPath);
@@ -290,7 +302,18 @@ export class AudioProcessor {
     }
   }
 
-  async cleanup(): Promise<void> {
+  async cleanup(filePath?: string): Promise<void> {
+    if (filePath) {
+      // Clean up specific file
+      try {
+        await fs.unlink(filePath);
+        console.log(`Cleaned up file: ${filePath}`);
+      } catch (error) {
+        console.warn(`Failed to cleanup file ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
+
     // Clean up temporary files older than 1 hour
     try {
       const files = await fs.readdir(this.tempDirectory);
