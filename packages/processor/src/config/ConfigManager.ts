@@ -71,6 +71,7 @@ export class ConfigManager {
     // Support CONFIG_FILE env var for specifying a different config file
     const configFile = process.env.CONFIG_FILE || 'config.yaml';
     this.configFilePath = join(configPath, configFile);
+    console.log(`📋 Loading configuration from: ${this.configFilePath}`);
     this.config = this.loadConfig();
   }
 

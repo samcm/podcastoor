@@ -22,6 +22,12 @@ export interface AdDetection {
   description?: string;
 }
 
+export interface AdSegment extends AdDetection {
+  title?: string;
+  audioUrl: string;
+  duration: number;
+}
+
 export interface Chapter {
   title: string;
   startTime: number;
@@ -79,10 +85,10 @@ export interface ProcessingArtifacts {
     original: AudioMetadata;
     processed: AudioMetadata;
   };
-  transcript: string;
   speakerCount: number;
   initialAdsDetected: AdDetection[];
   finalAdsDetected: AdDetection[];
+  adSegments?: AdSegment[];
   chapters: Chapter[];
   processingTime: {
     download: number;

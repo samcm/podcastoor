@@ -70,7 +70,7 @@ export interface AdRemoval {
   createdAt: Date;
 }
 
-import { AdDetection, Chapter } from './index';
+import { AdDetection, AdSegment, Chapter } from './index';
 
 export interface ProcessingResult {
   id?: number;
@@ -79,6 +79,7 @@ export interface ProcessingResult {
   originalUrl: string;
   processedUrl: string;
   adsRemoved: AdDetection[];
+  adSegments?: AdSegment[];
   chapters: Chapter[];
   processingCost: number;
   processedAt: Date;

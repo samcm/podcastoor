@@ -61,8 +61,10 @@ export class DatabaseManager {
   private db: Database.Database;
 
   constructor(config: DatabaseConfig) {
+    console.log(`🗄️  Initializing database at: ${config.dbPath}`);
     this.db = new Database(config.dbPath);
     this.initializeTables();
+    console.log(`✅ Database initialized successfully at: ${config.dbPath}`);
   }
 
   // ========== EPISODE MANAGEMENT ==========

@@ -32,15 +32,21 @@ if ! docker compose -f docker-compose.dev.yml ps | grep -q "podcastoor-minio.*Up
     echo -e "${GREEN}MinIO is ready!${NC}"
 fi
 
+# Get the project root directory
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Create necessary directories in project root
+mkdir -p "$PROJECT_ROOT/data" "$PROJECT_ROOT/tmp"
+
 # Run the processor in development mode
 echo -e "${GREEN}Starting Podcastoor processor...${NC}"
-cd packages/processor
 
-# Create necessary directories relative to processor directory
-mkdir -p ./data ./tmp
-
-# Set the config path to the root config directory
-export CONFIG_PATH="../../config"
+# Set the config path to the root config directory using absolute path
+export CONFIG_PATH="$PROJECT_ROOT/config"
 export CONFIG_FILE="config.dev.yaml"
+export DATABASE_PATH="$PROJECT_ROOT/data/podcastoor.db"
+export TEMP_DIR="$PROJECT_ROOT/tmp"
 
+# Run from packages/processor
+cd "$PROJECT_ROOT/packages/processor"
 pnpm dev

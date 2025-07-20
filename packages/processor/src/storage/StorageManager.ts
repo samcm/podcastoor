@@ -60,6 +60,50 @@ export class StorageManager {
     return result.url;
   }
 
+  async uploadAdSegment(filePath: string, podcastId: string, episodeId: string, adIndex: number, adType: string): Promise<UploadResult> {
+    const fileName = basename(filePath);
+    const key = this.buildAdSegmentKey(podcastId, episodeId, adIndex, adType);
+    
+    console.log(`Uploading ad segment: ${filePath} -> ${key}`);
+    
+    try {
+      const fileStats = await fs.stat(filePath);
+      const fileStream = createReadStream(filePath);
+      
+      const command = new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: fileStream,
+        ContentType: 'audio/mpeg',
+        ContentLength: fileStats.size,
+        ACL: this.config.settings.publicRead ? 'public-read' : 'private',
+        Metadata: {
+          'podcast-id': podcastId,
+          'episode-id': episodeId,
+          'ad-index': adIndex.toString(),
+          'ad-type': adType,
+          'uploaded-at': new Date().toISOString(),
+          'original-filename': fileName
+        }
+      });
+
+      const response = await this.s3Client.send(command);
+      
+      const url = await this.getPublicUrl(key);
+      
+      console.log(`Ad segment upload completed: ${key} (${fileStats.size} bytes)`);
+      
+      return {
+        key,
+        url,
+        size: fileStats.size,
+        etag: response.ETag || ''
+      };
+    } catch (error) {
+      throw new Error(`Failed to upload ad segment: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async uploadAudio(filePath: string, podcastId: string, episodeId: string): Promise<UploadResult> {
     const fileName = basename(filePath);
     const key = this.buildS3Key(podcastId, episodeId, fileName);
@@ -449,6 +493,14 @@ export class StorageManager {
   private buildArtifactKey(podcastId: string, episodeId: string): string {
     const cleanEpisodeId = episodeId.replace(/[^a-zA-Z0-9-_]/g, '-');
     return `artifacts/${podcastId}/${cleanEpisodeId}/processing-data.json`;
+  }
+
+  private buildAdSegmentKey(podcastId: string, episodeId: string, adIndex: number, adType: string): string {
+    const datePath = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const cleanEpisodeId = episodeId.replace(/[^a-zA-Z0-9-_]/g, '-');
+    const cleanAdType = adType.replace(/[^a-zA-Z0-9-_]/g, '-');
+    
+    return `podcasts/${podcastId}/${datePath}/${cleanEpisodeId}/ads/ad_${adIndex}_${cleanAdType}.mp3`;
   }
 
   getBucketName(): string {

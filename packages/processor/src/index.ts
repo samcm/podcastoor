@@ -4,6 +4,10 @@ import { serve } from '@hono/node-server';
 
 async function main() {
   const configPath = process.env.CONFIG_PATH || './config';
+  const configFile = process.env.CONFIG_FILE || 'config.yaml';
+  console.log('🚀 Starting Podcastoor Processor');
+  console.log(`📁 Config path: ${configPath}`);
+  console.log(`📄 Config file: ${configFile}`);
   const processor = new PodcastProcessor(configPath);
 
   let server: any = null;

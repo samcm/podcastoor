@@ -88,7 +88,6 @@ export class ProcessingJobWorker {
             original: { duration: episode.duration, format: 'mp3', bitrate: 128, sampleRate: 44100, channels: 2, size: episode.fileSize },
             processed: { duration: processedDuration, format: 'mp3', bitrate: 128, sampleRate: 44100, channels: 2, size: episode.fileSize * 0.9 }
           },
-          transcript: analysis.transcript,
           speakerCount: 1,
           initialAdsDetected: analysis.adsDetected,
           finalAdsDetected: refinedAds,

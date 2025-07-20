@@ -1,4 +1,4 @@
-import { AdDetection, Chapter, ProcessingArtifacts, ProcessingResult } from '@podcastoor/shared';
+import { AdDetection, AdSegment, Chapter, ProcessingArtifacts, ProcessingResult } from '@podcastoor/shared';
 import { PodcastJobData } from '../JobManager';
 import { AudioProcessor } from '../../audio/AudioProcessor';
 import { LLMOrchestrator } from '../../llm/LLMOrchestrator';
@@ -48,7 +48,7 @@ export class PodcastWorker {
       const audioAnalysis = await this.llmOrchestrator.analyzeAudio(audioPath);
       
       const analysisTime = Date.now() - analysisStartTime;
-      console.log(`✅ Audio analysis completed (${(analysisTime / 1000).toFixed(1)}s): ${audioAnalysis.transcript.length} characters transcribed`);
+      console.log(`✅ Audio analysis completed (${(analysisTime / 1000).toFixed(1)}s)`);
       console.log(`🎯 Initial ad detection: ${audioAnalysis.adsDetected.length} potential ad segments`);
       
       // Stage 3: Refine ad detection
@@ -81,12 +81,52 @@ export class PodcastWorker {
       const chaptersTime = Date.now() - chaptersStartTime;
       console.log(`✅ Chapters generated (${(chaptersTime / 1000).toFixed(1)}s): ${chapters.length} chapters`);
       
-      // Stage 5: Process audio (remove ads)
+      // Stage 5: Process audio (remove ads and extract ad segments)
       await job.updateProgress(70);
       console.log(`✂️  Stage 5/8: Processing audio (removing ${finalAds.length} ad segments)...`);
       const audioProcessingStartTime = Date.now();
       
+      // Remove ads from the main audio
       const processedPath = await this.audioProcessor.removeAds(audioPath, finalAds);
+      
+      // Extract individual ad segments
+      let adSegments: AdSegment[] = [];
+      if (finalAds.length > 0) {
+        console.log(`🎯 Extracting ${finalAds.length} ad segments...`);
+        const adPaths = await this.audioProcessor.extractAdSegments(audioPath, finalAds, episodeGuid);
+        
+        // Upload each ad segment
+        for (let i = 0; i < adPaths.length; i++) {
+          const adPath = adPaths[i];
+          const ad = finalAds[i];
+          
+          try {
+            const adUploadResult = await this.storageManager.uploadAdSegment(
+              adPath,
+              podcastId,
+              episodeGuid,
+              i + 1,
+              ad.adType
+            );
+            
+            const adMetadata = await this.audioProcessor.extractMetadata(adPath);
+            
+            adSegments.push({
+              ...ad,
+              title: ad.description || `${ad.adType} Ad ${i + 1}`,
+              audioUrl: adUploadResult.url,
+              duration: adMetadata.duration
+            });
+            
+            console.log(`✅ Ad segment ${i + 1} uploaded: ${adUploadResult.url}`);
+            
+            // Clean up the temporary ad file
+            await this.audioProcessor.cleanup(adPath);
+          } catch (error) {
+            console.error(`Failed to upload ad segment ${i + 1}:`, error);
+          }
+        }
+      }
       
       // Get metadata of processed file
       const processedMetadata = await this.audioProcessor.extractMetadata(processedPath);
@@ -120,10 +160,10 @@ export class PodcastWorker {
           original: audioMetadata,
           processed: processedMetadata
         },
-        transcript: audioAnalysis.transcript,
         speakerCount: 0,
         initialAdsDetected: audioAnalysis.adsDetected,
         finalAdsDetected: finalAds,
+        adSegments: adSegments,
         chapters: chapters,
         processingTime: {
           download: downloadTime,
@@ -156,6 +196,7 @@ export class PodcastWorker {
         originalUrl: audioUrl,
         processedUrl: uploadResult.url,
         adsRemoved: finalAds,
+        adSegments: adSegments,
         chapters: chapters,
         processingCost: totalCost,
         processedAt: new Date()

@@ -61,6 +61,47 @@ export class AudioProcessor {
     return outputPath;
   }
 
+  async extractAdSegments(inputPath: string, ads: AdDetection[], episodeGuid: string): Promise<string[]> {
+    if (ads.length === 0) {
+      return [];
+    }
+
+    const adPaths: string[] = [];
+    
+    // Sort ads by start time
+    const sortedAds = [...ads].sort((a, b) => a.startTime - b.startTime);
+    
+    try {
+      for (let i = 0; i < sortedAds.length; i++) {
+        const ad = sortedAds[i];
+        const adDuration = ad.endTime - ad.startTime;
+        
+        // Skip very short segments (< 1 second)
+        if (adDuration < 1) {
+          console.warn(`Skipping ad segment ${i + 1}: duration too short (${adDuration}s)`);
+          continue;
+        }
+        
+        const adFileName = `${episodeGuid}_ad_${i + 1}_${ad.adType}.mp3`;
+        const adPath = join(this.tempDirectory, adFileName);
+        
+        console.log(`Extracting ad segment ${i + 1}: ${ad.startTime}s - ${ad.endTime}s (${ad.adType})`);
+        
+        await this.extractSegment(inputPath, adPath, ad.startTime, adDuration);
+        adPaths.push(adPath);
+      }
+      
+      console.log(`Extracted ${adPaths.length} ad segments`);
+      return adPaths;
+    } catch (error) {
+      // Clean up any successfully extracted files on error
+      await Promise.all(adPaths.map(path => 
+        fs.unlink(path).catch((err: unknown) => console.warn(`Failed to cleanup ad file ${path}:`, err))
+      ));
+      throw new Error(`Failed to extract ad segments: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async removeAdsToPath(inputPath: string, outputPath: string, ads: AdDetection[]): Promise<void> {
     if (ads.length === 0) {
       // No ads to remove, just copy the file

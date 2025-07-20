@@ -8,21 +8,22 @@ import { ChaptersList } from '../components/ChaptersList';
 import { formatTime, formatDuration } from '@podcastoor/shared';
 
 export default function EpisodeDetailPage() {
-  const { podcastId, episodeGuid } = useParams<{ podcastId: string; episodeGuid: string }>();
+  const { showId, episodeId } = useParams<{ showId: string; episodeId: string }>();
   const [episode, setEpisode] = useState<EpisodeDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
   
   useEffect(() => {
-    if (episodeGuid) {
+    if (episodeId) {
       loadEpisode();
     }
-  }, [episodeGuid]);
+  }, [episodeId]);
   
   const loadEpisode = async () => {
     try {
       setLoading(true);
-      const data = await api.getEpisode(episodeGuid!, podcastId);
+      console.log('Loading episode with params:', { episodeId, showId });
+      const data = await api.getEpisode(episodeId!, showId);
       setEpisode(data);
     } catch (error) {
       console.error('Failed to load episode:', error);
@@ -57,7 +58,7 @@ export default function EpisodeDetailPage() {
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Header */}
       <div className="mb-8">
-        <Link to={`/shows/${podcastId}`} className="text-blue-600 hover:text-blue-800 mb-4 inline-block">
+        <Link to={`/shows/${showId}`} className="text-blue-600 hover:text-blue-800 mb-4 inline-block">
           ← Back to show
         </Link>
         

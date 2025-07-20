@@ -1,5 +1,4 @@
 import { Hono, Context } from 'hono';
-import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { existsSync } from 'fs';
@@ -16,8 +15,6 @@ export function createAPIServer(processor: PodcastProcessor) {
       credentials: true,
     }));
   }
-
-  app.use('*', logger());
 
   // Health check
   app.get('/health', async (c: Context) => {
@@ -226,21 +223,54 @@ export function createAPIServer(processor: PodcastProcessor) {
         return c.json({ error: 'Episode not found' }, 404);
       }
       
+      // Build the EpisodeDetails response in the expected format
+      const response: any = {
+        upstream: {
+          id: episode.id,
+          podcastId: episode.podcastId,
+          episodeGuid: episode.episodeGuid,
+          title: episode.title,
+          description: episode.description,
+          audioUrl: episode.audioUrl,
+          publishDate: episode.publishDate,
+          duration: episode.duration,
+          fileSize: episode.fileSize || 0,
+          importedAt: episode.createdAt
+        },
+        chapters: [],
+        adRemovals: [],
+        llmCosts: []
+      };
+      
       // Get processing result if available
       if (episode.status === 'completed' && episode.processedUrl) {
         const results = await db.getProcessingResults(podcastId);
         const result = results.find(r => r.episodeId === episodeGuid);
         if (result) {
-          return c.json({
-            ...episode,
-            adsRemoved: result.adsRemoved?.length || 0,
-            chapters: result.chapters?.length || 0
-          });
+          response.result = {
+            ...result,
+            processedUrl: episode.processedUrl,
+            processingCost: episode.processingCost
+          };
+          response.chapters = result.chapters || [];
+          response.adRemovals = result.adsRemoved || [];
+          
+          // Get ad segments from artifacts
+          try {
+            const storageManager = processor.getStorageManager();
+            const artifacts = await storageManager.getProcessingArtifacts(podcastId, episodeGuid);
+            if (artifacts && artifacts.adSegments) {
+              response.adSegments = artifacts.adSegments;
+            }
+          } catch (error) {
+            console.error('Failed to get ad segments from artifacts:', error);
+          }
         }
       }
       
-      return c.json(episode);
+      return c.json(response);
     } catch (error) {
+      console.error('Error fetching episode details:', error);
       return c.json({ 
         error: error instanceof Error ? error.message : 'Unknown error' 
       }, 500);
@@ -257,6 +287,60 @@ export function createAPIServer(processor: PodcastProcessor) {
       
       return c.json(stats);
     } catch (error) {
+      return c.json({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, 500);
+    }
+  });
+  
+  // Ad segment endpoint
+  app.get('/api/ads/:podcastId/:episodeGuid/:adIndex', async (c: Context) => {
+    const podcastId = c.req.param('podcastId');
+    const episodeGuid = c.req.param('episodeGuid');
+    const adIndex = parseInt(c.req.param('adIndex'), 10);
+    
+    try {
+      const storageManager = processor.getStorageManager();
+      const artifacts = await storageManager.getProcessingArtifacts(podcastId, episodeGuid);
+      
+      if (!artifacts || !artifacts.adSegments) {
+        return c.json({ error: 'Ad segments not found' }, 404);
+      }
+      
+      const adSegment = artifacts.adSegments[adIndex - 1];
+      if (!adSegment) {
+        return c.json({ error: 'Ad segment not found' }, 404);
+      }
+      
+      // Return a redirect to the actual ad audio URL
+      return c.redirect(adSegment.audioUrl, 302);
+    } catch (error) {
+      console.error(`Failed to serve ad segment for ${podcastId}/${episodeGuid}/${adIndex}:`, error);
+      return c.json({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, 500);
+    }
+  });
+  
+  // Get all ad segments for an episode
+  app.get('/api/ads/:podcastId/:episodeGuid', async (c: Context) => {
+    const podcastId = c.req.param('podcastId');
+    const episodeGuid = c.req.param('episodeGuid');
+    
+    try {
+      const storageManager = processor.getStorageManager();
+      const artifacts = await storageManager.getProcessingArtifacts(podcastId, episodeGuid);
+      
+      if (!artifacts || !artifacts.adSegments) {
+        return c.json({ adSegments: [] });
+      }
+      
+      return c.json({ 
+        adSegments: artifacts.adSegments,
+        count: artifacts.adSegments.length 
+      });
+    } catch (error) {
+      console.error(`Failed to get ad segments for ${podcastId}/${episodeGuid}:`, error);
       return c.json({ 
         error: error instanceof Error ? error.message : 'Unknown error' 
       }, 500);
