@@ -46,7 +46,6 @@ services:
         condition: service_completed_successfully
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - STORAGE_ACCESS_KEY=minioadmin
       - STORAGE_SECRET_KEY=minioadmin123
       - NODE_ENV=development

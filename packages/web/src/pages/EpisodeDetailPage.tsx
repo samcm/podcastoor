@@ -22,7 +22,7 @@ export default function EpisodeDetailPage() {
   const loadEpisode = async () => {
     try {
       setLoading(true);
-      const data = await api.getEpisode(episodeGuid!);
+      const data = await api.getEpisode(episodeGuid!, podcastId);
       setEpisode(data);
     } catch (error) {
       console.error('Failed to load episode:', error);

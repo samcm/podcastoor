@@ -4,8 +4,22 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 export const api = {
   // Episode endpoints
-  async getEpisode(episodeGuid: string): Promise<EpisodeDetails> {
-    const res = await fetch(`${API_BASE}/episodes/${episodeGuid}`);
+  async getEpisode(episodeGuid: string, podcastId?: string): Promise<EpisodeDetails> {
+    // For now, we need to extract the podcastId from the URL or pass it
+    if (!podcastId) {
+      // Try to extract from current URL if we're on an episode page
+      const pathParts = window.location.pathname.split('/');
+      const showsIndex = pathParts.indexOf('shows');
+      if (showsIndex !== -1 && pathParts[showsIndex + 1]) {
+        podcastId = pathParts[showsIndex + 1];
+      }
+    }
+    
+    if (!podcastId) {
+      throw new Error('Podcast ID is required to fetch episode');
+    }
+    
+    const res = await fetch(`${API_BASE}/podcasts/${podcastId}/episodes/${episodeGuid}`);
     if (!res.ok) throw new Error('Failed to fetch episode');
     return res.json();
   },

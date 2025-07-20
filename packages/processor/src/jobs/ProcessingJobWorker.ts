@@ -57,7 +57,7 @@ export class ProcessingJobWorker {
       // Step 4: Generate chapters
       await context.recordStep('generate_chapters');
       await context.updateProgress(60, 'Generating chapters');
-      const chapters = await this.llm.generateChapters(analysis, refinedAds);
+      const chapters = await this.llm.generateChapters(analysis);
       
       // Step 5: Process audio (remove ads)
       await context.recordStep('process_audio');

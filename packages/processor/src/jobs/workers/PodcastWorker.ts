@@ -76,7 +76,7 @@ export class PodcastWorker {
       console.log(`📚 Stage 4/8: Generating chapters...`);
       const chaptersStartTime = Date.now();
       
-      const chapters = await this.llmOrchestrator.generateChapters(audioAnalysis, finalAds);
+      const chapters = await this.llmOrchestrator.generateChapters(audioAnalysis);
       
       const chaptersTime = Date.now() - chaptersStartTime;
       console.log(`✅ Chapters generated (${(chaptersTime / 1000).toFixed(1)}s): ${chapters.length} chapters`);

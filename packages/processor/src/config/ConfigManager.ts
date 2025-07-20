@@ -27,13 +27,8 @@ export interface AppConfig {
   };
   llm: {
     geminiApiKey: string;
-    openrouterApiKey: string;
-    openrouterEndpoint: string;
     models: {
       geminiAudio: string;
-      textAdDetection: string;
-      chapters: string;
-      enhancement: string;
     };
     maxTokens: number;
     temperature: number;
@@ -113,7 +108,7 @@ export class ConfigManager {
   }
 
   private expandEnvironmentVariables(obj: any): void {
-    const requiredEnvVars = ['GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'STORAGE_ACCESS_KEY', 'STORAGE_SECRET_KEY'];
+    const requiredEnvVars = ['GEMINI_API_KEY', 'STORAGE_ACCESS_KEY', 'STORAGE_SECRET_KEY'];
     
     for (const key in obj) {
       if (typeof obj[key] === 'string' && obj[key].startsWith('${') && obj[key].endsWith('}')) {
