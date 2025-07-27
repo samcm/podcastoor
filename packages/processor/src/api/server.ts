@@ -292,12 +292,18 @@ export function createAPIServer(processor: PodcastProcessor) {
   });
 
   // RSS feed proxy - serves processed audio URLs
-  app.get('/rss/:showId.rss', async (c: Context) => {
-    const showId = c.req.param('showId');
+  app.get('/rss/:showId', async (c: Context) => {
+    const showIdWithExt = c.req.param('showId');
+    // Remove .rss extension if present
+    const showId = showIdWithExt.endsWith('.rss') 
+      ? showIdWithExt.slice(0, -4) 
+      : showIdWithExt;
     
     try {
       const db = processor.getDatabase();
+      console.log('RSS request for show:', showId);
       const show = db.getShow(showId);
+      console.log('Found show:', show);
       
       if (!show) {
         return c.json({ error: 'Show not found' }, 404);
@@ -311,10 +317,44 @@ export function createAPIServer(processor: PodcastProcessor) {
       
       let rssContent = await response.text();
       
+      // Get the public URL from config
+      const publicUrl = processor.getConfig().getPublicUrl();
+      
       // Get all episodes with processed versions
       const episodes = db.getShowEpisodes(showId);
       
-      // For each episode, check if we have a processed version
+      // Replace all audio URLs to go through our proxy
+      for (const episode of episodes) {
+        // Always use our audio proxy endpoint
+        const audioProxyUrl = `${publicUrl}/audio/${episode.guid}`;
+        
+        // Find all items with this GUID and replace their audio URLs
+        const guidPattern = episode.guid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        
+        // Create a pattern to find the item block for this episode
+        const itemPattern = new RegExp(
+          `<item>(?:[\\s\\S]*?)<guid[^>]*>${guidPattern}</guid>(?:[\\s\\S]*?)</item>`,
+          'g'
+        );
+        
+        rssContent = rssContent.replace(itemPattern, (itemBlock) => {
+          // Replace audio URL in enclosure tag
+          itemBlock = itemBlock.replace(
+            /(<enclosure[^>]*url=["'])([^"']+)([^>]*>)/g,
+            `$1${audioProxyUrl}$3`
+          );
+          
+          // Replace audio URL in media:content tag
+          itemBlock = itemBlock.replace(
+            /(<media:content[^>]*url=["'])([^"']+)([^>]*type="audio)/g,
+            `$1${audioProxyUrl}$3`
+          );
+          
+          return itemBlock;
+        });
+      }
+      
+      // Now handle additional modifications for processed episodes
       for (const episode of episodes) {
         const jobs = db.getEpisodeJobs(episode.guid);
         const completedJob = jobs.find(job => job.status === 'completed');
@@ -322,12 +362,10 @@ export function createAPIServer(processor: PodcastProcessor) {
         if (completedJob) {
           const processedEpisode = db.getProcessedEpisode(completedJob.id);
           const chapters = db.getChapters(completedJob.id);
+          const ads = db.getAds(completedJob.id);
           
           if (processedEpisode) {
-            // Replace the original audio URL with our processed version
-            const processedAudioUrl = processedEpisode.processedUrl;
-            
-            // Find all items with this GUID and replace their audio URLs
+            // Find all items with this GUID to make additional modifications
             const guidPattern = episode.guid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             
             // Create a pattern to find the item block for this episode
@@ -337,18 +375,6 @@ export function createAPIServer(processor: PodcastProcessor) {
             );
             
             rssContent = rssContent.replace(itemPattern, (itemBlock) => {
-              // Replace audio URL in enclosure tag
-              itemBlock = itemBlock.replace(
-                /(<enclosure[^>]*url=["'])([^"']+)([^>]*>)/g,
-                `$1${processedAudioUrl}$3`
-              );
-              
-              // Replace audio URL in media:content tag
-              itemBlock = itemBlock.replace(
-                /(<media:content[^>]*url=["'])([^"']+)([^>]*type="audio)/g,
-                `$1${processedAudioUrl}$3`
-              );
-              
               // Update duration
               if (processedEpisode.processedDuration) {
                 itemBlock = itemBlock.replace(
@@ -364,17 +390,33 @@ export function createAPIServer(processor: PodcastProcessor) {
                 `$1${fileSizeInBytes}$3`
               );
               
-              // Add note to title
-              itemBlock = itemBlock.replace(
-                /(<title>)([^<]*)(<\/title>)/,
-                '$1$2 [Ad-Free]$3'
-              );
+              // Add ad removal stats to title if ads were removed
+              if (ads && ads.length > 0) {
+                const timeSaved = processedEpisode.originalDuration - processedEpisode.processedDuration;
+                const minutes = Math.floor(timeSaved / 60);
+                const seconds = Math.round(timeSaved % 60);
+                const timeString = minutes > 0 ? `${minutes}:${seconds.toString().padStart(2, '0')}` : `0:${seconds}`;
+                const adStats = ` (${ads.length} ads removed, ${timeString} saved)`;
+                
+                itemBlock = itemBlock.replace(
+                  /(<title>)([^<]*)(<\/title>)/,
+                  `$1$2${adStats}$3`
+                );
+              }
               
               // Add note to description
-              itemBlock = itemBlock.replace(
-                /(<description><!\[CDATA\[)([^\]]*)/,
-                '$1<p><strong>[Ad-Free Version]</strong> - Ads have been automatically removed.</p>$2'
-              );
+              if (ads && ads.length > 0) {
+                const timeSaved = processedEpisode.originalDuration - processedEpisode.processedDuration;
+                const minutes = Math.floor(timeSaved / 60);
+                const seconds = Math.round(timeSaved % 60);
+                const timeString = minutes > 0 ? `${minutes}:${seconds.toString().padStart(2, '0')}` : `0:${seconds}`;
+                const adNote = `<p><strong>Ad-Free Version</strong> - ${ads.length} ads removed, ${timeString} saved.</p>`;
+                
+                itemBlock = itemBlock.replace(
+                  /(<description><!\[CDATA\[)([^\]]*)/,
+                  `$1${adNote}$2`
+                );
+              }
               
               // Add chapters if we have them
               if (chapters && chapters.length > 0) {
@@ -427,11 +469,6 @@ export function createAPIServer(processor: PodcastProcessor) {
     }
   });
 
-  // Redirect old RSS URLs to new format
-  app.get('/rss/:showId', async (c: Context) => {
-    const showId = c.req.param('showId');
-    return c.redirect(`/rss/${showId}.rss`, 301);
-  });
 
   // Serve static files from storage
   if (process.env.NODE_ENV === 'development') {

@@ -7,18 +7,18 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "dev": "tsx src/index.ts",
+    "dev": "tsx --enable-source-maps src/index.ts",
     "start": "NODE_ENV=production node dist/index.js"
   },
   "dependencies": {
     "@google/genai": "^1.9.0",
-    "@hono/node-server": "^1.4.0",
+    "@hono/node-server": "^1.17.1",
     "@podcastoor/shared": "workspace:*",
     "better-sqlite3": "11.5.0",
     "chokidar": "^3.5.0",
     "dotenv": "^17.2.0",
     "fast-xml-parser": "^4.3.0",
-    "hono": "^3.11.0",
+    "hono": "^4.8.9",
     "node-cron": "^3.0.0",
     "rss-parser": "^3.13.0",
     "yaml": "^2.3.0",

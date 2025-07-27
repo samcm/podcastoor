@@ -24,8 +24,8 @@ importers:
         specifier: ^1.9.0
         version: 1.9.0
       '@hono/node-server':
-        specifier: ^1.4.0
-        version: 1.15.0(hono@3.12.12)
+        specifier: ^1.17.1
+        version: 1.17.1(hono@4.8.9)
       '@podcastoor/shared':
         specifier: workspace:*
         version: link:../shared
@@ -42,8 +42,8 @@ importers:
         specifier: ^4.3.0
         version: 4.5.3
       hono:
-        specifier: ^3.11.0
-        version: 3.12.12
+        specifier: ^4.8.9
+        version: 4.8.9
       node-cron:
         specifier: ^3.0.0
         version: 3.0.3
@@ -770,13 +770,13 @@ packages:
       - utf-8-validate
     dev: false
 
-  /@hono/node-server@1.15.0(hono@3.12.12):
-    resolution: {integrity: sha512-MjmK4l5N4dQpZ9OSWN0tCj7ejuc7WvuWMzSKtc89bnknJykAeHxzRigXBTYZk85H6Awrii6RM59iUiUluApu2A==}
+  /@hono/node-server@1.17.1(hono@4.8.9):
+    resolution: {integrity: sha512-SY79W/C+2b1MyAzmIcV32Q47vO1b5XwLRwj8S9N6Jr5n1QCkIfAIH6umOSgqWZ4/v67hg6qq8Ha5vZonVidGsg==}
     engines: {node: '>=18.14.1'}
     peerDependencies:
       hono: ^4
     dependencies:
-      hono: 3.12.12
+      hono: 4.8.9
     dev: false
 
   /@isaacs/cliui@8.0.2:
@@ -1665,9 +1665,9 @@ packages:
       function-bind: 1.1.2
     dev: true
 
-  /hono@3.12.12:
-    resolution: {integrity: sha512-5IAMJOXfpA5nT+K0MNjClchzz0IhBHs2Szl7WFAhrFOsbtQsYmNynFyJRg/a3IPsmCfxcrf8txUGiNShXpK5Rg==}
-    engines: {node: '>=16.0.0'}
+  /hono@4.8.9:
+    resolution: {integrity: sha512-ERIxkXMRhUxGV7nS/Af52+j2KL60B1eg+k6cPtgzrGughS+espS9KQ7QO0SMnevtmRlBfAcN0mf1jKtO6j/doA==}
+    engines: {node: '>=16.9.0'}
     dev: false
 
   /https-proxy-agent@7.0.6:

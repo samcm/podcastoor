@@ -11,6 +11,7 @@ import {
 export interface AppConfig {
   podcasts: PodcastConfig[];
   dataDir: string;
+  publicUrl: string;
   processing: {
     concurrency: number;
     defaultRetentionDays: number;
@@ -158,6 +159,9 @@ export class ConfigManager {
     return this.config.dataDir;
   }
 
+  getPublicUrl(): string {
+    return this.config.publicUrl || 'http://localhost:3000';
+  }
 
   onConfigChange(callback: (config: AppConfig) => void): void {
     this.changeCallbacks.add(callback);

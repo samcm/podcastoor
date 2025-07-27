@@ -34,6 +34,7 @@ export CONFIG_FILE="config.yaml"
 export DATABASE_PATH="$PROJECT_ROOT/data/podcastoor.db"
 export TEMP_DIR="$PROJECT_ROOT/tmp"
 export STORAGE_BASE_DIR="$PROJECT_ROOT/storage"
+export PUBLIC_URL="${PUBLIC_URL:-http://localhost:5173}"
 
 # Run from packages/processor
 cd "$PROJECT_ROOT/packages/processor"

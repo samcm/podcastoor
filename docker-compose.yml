@@ -13,6 +13,7 @@ services:
       - CONFIG_PATH=/app/config
       - STORAGE_BASE_DIR=/app/storage
       - STORAGE_PUBLIC_URL=http://localhost:3000/files
+      - PUBLIC_URL=${PUBLIC_URL:-http://localhost:3000}
     volumes:
       - ./config:/app/config:ro
       - ./data:/app/data

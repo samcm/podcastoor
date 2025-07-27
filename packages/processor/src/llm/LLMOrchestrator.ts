@@ -309,6 +309,7 @@ export class LLMOrchestrator {
    - Use concise titles (1-3 words)
    - Focus on high-level topic changes, not minor transitions
    - Chapters should span distinct topics, not just minor changes in topic. For example, if a podcast talks about 5 different NRL topics in a window of 10 minutes, there should be 1 chapter titled "NRL" that spans the entire 10 minute period.
+   - Chapters must not contain any ads as the ads will be removed from the audio file.
 
   For each chapter, provide:
   - title: concise chapter title (1-3 words)
