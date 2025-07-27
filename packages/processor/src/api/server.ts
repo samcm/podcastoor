@@ -320,10 +320,25 @@ export function createAPIServer(processor: PodcastProcessor) {
       // Get the public URL from config
       const publicUrl = processor.getConfig().getPublicUrl();
       
+      // Modify the channel title to make it unique
+      rssContent = rssContent.replace(
+        /(<title>)([^<]*?)(<\/title>)/,
+        (match, p1, p2, p3) => {
+          // Only replace the first title tag (channel title, not episode titles)
+          return `${p1}${p2} (Podcastoor)${p3}`;
+        }
+      );
+      
+      // Update the channel link to our RSS feed
+      rssContent = rssContent.replace(
+        /(<link>)([^<]*?)(<\/link>)/,
+        `$1${publicUrl}/rss/${showId}$3`
+      );
+      
       // Get all episodes with processed versions
       const episodes = db.getShowEpisodes(showId);
       
-      // Replace all audio URLs to go through our proxy
+      // Replace all audio URLs to go through our proxy and modify GUIDs
       for (const episode of episodes) {
         // Always use our audio proxy endpoint
         const audioProxyUrl = `${publicUrl}/audio/${episode.guid}`;
@@ -348,6 +363,12 @@ export function createAPIServer(processor: PodcastProcessor) {
           itemBlock = itemBlock.replace(
             /(<media:content[^>]*url=["'])([^"']+)([^>]*type="audio)/g,
             `$1${audioProxyUrl}$3`
+          );
+          
+          // Modify the GUID to make it unique
+          itemBlock = itemBlock.replace(
+            /(<guid[^>]*>)([^<]+)(<\/guid>)/,
+            `$1podcastoor-${episode.guid}$3`
           );
           
           return itemBlock;
