@@ -484,5 +484,21 @@ export function createAPIServer(processor: PodcastProcessor) {
     }
   }
 
+  // Serve frontend (for Docker/production)
+  const webDistPath = join(process.cwd(), 'packages', 'web', 'dist');
+  if (existsSync(webDistPath)) {
+    console.log('Serving frontend from:', webDistPath);
+    app.use('/*', serveStatic({ 
+      root: webDistPath,
+      rewriteRequestPath: (path) => {
+        // For SPA, serve index.html for all non-asset routes
+        if (!path.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$/)) {
+          return '/index.html';
+        }
+        return path;
+      }
+    }));
+  }
+
   return app;
 }
