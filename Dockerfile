@@ -28,7 +28,6 @@ COPY packages/shared ./packages/shared
 COPY packages/processor ./packages/processor
 COPY packages/web ./packages/web
 COPY turbo.json ./
-COPY config/ ./config/
 
 # Build everything using turbo (handles dependencies)
 RUN pnpm build
@@ -65,11 +64,15 @@ RUN pnpm install --prod
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/packages/processor/dist ./packages/processor/dist
 COPY --from=builder /app/packages/web/dist ./packages/web/dist
-COPY --from=builder /app/config ./config
+# Also copy the database schema file
+COPY --from=builder /app/packages/processor/src/database/schema.sql ./packages/processor/dist/database/
 
 # Create necessary directories
 RUN mkdir -p /app/data /app/tmp /app/config && \
     chown -R podcastoor:nodejs /app
+
+# Note: You MUST mount a config file at runtime:
+# docker run -v ./config:/app/config:ro ...
 
 # Switch to non-root user
 USER podcastoor

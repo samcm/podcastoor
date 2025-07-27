@@ -15,7 +15,7 @@ services:
       - STORAGE_PUBLIC_URL=http://localhost:3000/files
       - PUBLIC_URL=${PUBLIC_URL:-http://localhost:3000}
     volumes:
-      - ./config:/app/config:ro
+      - ./config:/app/config:ro  # Required: config directory with config.yaml
       - ./data:/app/data
       - ./tmp:/app/tmp
       - ./storage:/app/storage
