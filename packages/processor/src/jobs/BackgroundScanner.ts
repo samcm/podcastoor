@@ -1,4 +1,4 @@
-import { DatabaseService } from '../services/database';
+import { Database } from '../database/Database';
 
 interface ProcessingConfig {
   jobPollInterval: number;
@@ -10,7 +10,7 @@ export class BackgroundScanner {
   private scanInterval: NodeJS.Timeout | null = null;
   
   constructor(
-    private db: DatabaseService,
+    private db: Database,
     private config: ProcessingConfig
   ) {}
   
@@ -33,32 +33,34 @@ export class BackgroundScanner {
   
   private async scan(): Promise<void> {
     try {
-      const podcasts = await this.db.getAllPodcasts();
+      const shows = this.db.getAllShows();
       
-      for (const podcast of podcasts) {
-        const unprocessed = await this.db.getUnprocessedEpisodes(
-          podcast.id,
-          this.config.maxEpisodesPerPodcast
-        );
+      for (const show of shows) {
+        // Get all episodes for the show
+        const episodes = this.db.getShowEpisodes(show.id, this.config.maxEpisodesPerPodcast);
+        
+        // Filter to get unprocessed episodes
+        const unprocessed = [];
+        for (const episode of episodes) {
+          const jobs = this.db.getEpisodeJobs(episode.guid);
+          const hasCompletedJob = jobs.some(job => job.status === 'completed');
+          if (!hasCompletedJob) {
+            unprocessed.push(episode);
+          }
+        }
         
         for (const episode of unprocessed) {
           // Check if episode is within retention period
           const ageInDays = (Date.now() - episode.publishDate.getTime()) / (1000 * 60 * 60 * 24);
           if (ageInDays > this.config.episodeRetentionDays) {
-            console.log(`Skipping old episode ${episode.episodeGuid} (${ageInDays.toFixed(1)} days old)`);
+            console.log(`Skipping old episode ${episode.guid} (${ageInDays.toFixed(1)} days old`);
             continue;
           }
           
           // Create background processing job
-          await this.db.createProcessingJob({
-            episodeGuid: episode.episodeGuid,
-            podcastId: episode.podcastId,
-            reason: 'background',
-            priority: 0,
-            isProtected: false
-          });
+          this.db.createJob(episode.guid, 0);
           
-          console.log(`Created background job for episode ${episode.episodeGuid}`);
+          console.log(`Created background job for episode ${episode.guid}`);
         }
       }
     } catch (error) {

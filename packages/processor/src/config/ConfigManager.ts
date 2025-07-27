@@ -10,54 +10,22 @@ import {
 
 export interface AppConfig {
   podcasts: PodcastConfig[];
+  dataDir: string;
   processing: {
     concurrency: number;
-    retryAttempts: number;
     defaultRetentionDays: number;
-    tempDirectory: string;
-    maxFileSize: string;
     maxDuration: number;
     timeoutMinutes: number;
-    audioQuality: {
-      format: string;
-      bitrate: number;
-      sampleRate: number;
-      normalize: boolean;
-    };
+    minAdDuration: number;
   };
   llm: {
     geminiApiKey: string;
     models: {
       geminiAudio: string;
     };
-    maxTokens: number;
-    temperature: number;
-    timeoutMs: number;
-    costLimits: {
-      maxCostPerEpisode: number;
-    };
   };
   storage: {
-    provider: 'minio' | 'r2';
-    endpoint: string;
-    bucket: string;
-    region?: string;
-    accessKeyId: string;
-    secretAccessKey: string;
-    settings: {
-      publicRead: boolean;
-      presignedExpiry: number;
-      multipartThreshold: string;
-      maxConcurrentUploads: number;
-    };
-  };
-  database: {
-    path: string;
-  };
-  jobs: {
-    concurrency: number;
-    retryAttempts: number;
-    processingTimeoutMinutes: number;
+    publicUrl?: string;
   };
 }
 
@@ -109,7 +77,7 @@ export class ConfigManager {
   }
 
   private expandEnvironmentVariables(obj: any): void {
-    const requiredEnvVars = ['GEMINI_API_KEY', 'STORAGE_ACCESS_KEY', 'STORAGE_SECRET_KEY'];
+    const requiredEnvVars = ['GEMINI_API_KEY'];
     
     for (const key in obj) {
       if (typeof obj[key] === 'string' && obj[key].startsWith('${') && obj[key].endsWith('}')) {
@@ -159,7 +127,10 @@ export class ConfigManager {
   }
 
   getProcessingConfig() {
-    return this.config.processing;
+    return {
+      ...this.config.processing,
+      tempDirectory: this.getTempDirectory()
+    };
   }
 
   getLLMConfig() {
@@ -167,16 +138,26 @@ export class ConfigManager {
   }
 
   getStorageConfig() {
-    return this.config.storage;
+    return {
+      ...this.config.storage,
+      baseDirectory: join(this.config.dataDir, 'storage')
+    };
   }
 
   getDatabaseConfig() {
-    return this.config.database;
+    return {
+      path: join(this.config.dataDir, 'database', 'podcastoor.db')
+    };
   }
 
-  getJobsConfig() {
-    return this.config.jobs;
+  getTempDirectory(): string {
+    return join(this.config.dataDir, 'temp');
   }
+
+  getDataDirectory(): string {
+    return this.config.dataDir;
+  }
+
 
   onConfigChange(callback: (config: AppConfig) => void): void {
     this.changeCallbacks.add(callback);

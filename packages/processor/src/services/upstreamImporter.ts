@@ -1,11 +1,11 @@
 import Parser from 'rss-parser';
-import { DatabaseService } from './database';
+import { Database } from '../database/Database';
 import { UpstreamEpisode } from '@podcastoor/shared';
 
 export class UpstreamImporter {
   private parser = new Parser();
   
-  constructor(private db: DatabaseService) {}
+  constructor(private db: Database) {}
   
   async importPodcastFeed(podcastId: string, feedUrl: string): Promise<number> {
     try {
@@ -26,7 +26,24 @@ export class UpstreamImporter {
           fileSize: parseInt(String(item.enclosure.length || '0'))
         };
         
-        await this.db.insertUpstreamEpisode(episode);
+        // First ensure the show exists
+        if (!this.db.getShow(podcastId)) {
+          // Get show title from feed
+          const showTitle = feed.title || 'Unknown Podcast';
+          const showDescription = feed.description || undefined;
+          this.db.upsertShow(podcastId, showTitle, showDescription, feedUrl);
+        }
+        
+        // Insert episode
+        this.db.upsertEpisode({
+          guid: episode.episodeGuid,
+          showId: episode.podcastId,
+          title: episode.title,
+          description: episode.description,
+          audioUrl: episode.audioUrl,
+          publishDate: episode.publishDate,
+          duration: episode.duration
+        });
         imported++;
       }
       

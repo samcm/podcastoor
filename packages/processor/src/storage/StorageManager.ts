@@ -1,24 +1,11 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command, HeadObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { createReadStream, promises as fs } from 'fs';
-import { join, basename } from 'path';
+import { createReadStream, promises as fs, createWriteStream, existsSync, mkdirSync } from 'fs';
+import { join, basename, dirname } from 'path';
 import { pipeline } from 'stream';
-import { createWriteStream } from 'fs';
 import { ProcessingArtifacts } from '@podcastoor/shared';
 
 export interface StorageConfig {
-  provider: 'minio' | 'r2';
-  endpoint: string;
-  bucket: string;
-  region?: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-  settings: {
-    publicRead: boolean;
-    presignedExpiry: number;
-    multipartThreshold: string;
-    maxConcurrentUploads: number;
-  };
+  baseDirectory: string;
+  publicUrl?: string;
 }
 
 export interface UploadResult {
@@ -36,23 +23,17 @@ export interface StorageObject {
 }
 
 export class StorageManager {
-  private s3Client: S3Client;
-  private bucket: string;
+  private baseDirectory: string;
+  private publicUrl: string;
   private config: StorageConfig;
 
   constructor(config: StorageConfig) {
     this.config = config;
-    this.bucket = config.bucket;
+    this.baseDirectory = config.baseDirectory;
+    this.publicUrl = config.publicUrl || 'http://localhost:3000/files';
     
-    this.s3Client = new S3Client({
-      endpoint: config.endpoint,
-      region: config.region || 'auto',
-      credentials: {
-        accessKeyId: config.accessKeyId,
-        secretAccessKey: config.secretAccessKey,
-      },
-      forcePathStyle: config.provider === 'minio', // Required for MinIO
-    });
+    // Ensure base directory exists
+    mkdirSync(this.baseDirectory, { recursive: true });
   }
 
   async uploadAudioFile(podcastId: string, episodeGuid: string, filePath: string): Promise<string> {
@@ -67,29 +48,16 @@ export class StorageManager {
     console.log(`Uploading ad segment: ${filePath} -> ${key}`);
     
     try {
+      const targetPath = join(this.baseDirectory, key);
+      await this.ensureDirectoryExists(dirname(targetPath));
+      
       const fileStats = await fs.stat(filePath);
-      const fileStream = createReadStream(filePath);
       
-      const command = new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: fileStream,
-        ContentType: 'audio/mpeg',
-        ContentLength: fileStats.size,
-        ACL: this.config.settings.publicRead ? 'public-read' : 'private',
-        Metadata: {
-          'podcast-id': podcastId,
-          'episode-id': episodeId,
-          'ad-index': adIndex.toString(),
-          'ad-type': adType,
-          'uploaded-at': new Date().toISOString(),
-          'original-filename': fileName
-        }
-      });
-
-      const response = await this.s3Client.send(command);
+      // Copy file to storage location
+      await fs.copyFile(filePath, targetPath);
       
-      const url = await this.getPublicUrl(key);
+      const url = this.getPublicUrl(key);
+      const etag = this.generateEtag(targetPath, fileStats.size);
       
       console.log(`Ad segment upload completed: ${key} (${fileStats.size} bytes)`);
       
@@ -97,7 +65,7 @@ export class StorageManager {
         key,
         url,
         size: fileStats.size,
-        etag: response.ETag || ''
+        etag
       };
     } catch (error) {
       throw new Error(`Failed to upload ad segment: ${error instanceof Error ? error.message : String(error)}`);
@@ -106,32 +74,21 @@ export class StorageManager {
 
   async uploadAudio(filePath: string, podcastId: string, episodeId: string): Promise<UploadResult> {
     const fileName = basename(filePath);
-    const key = this.buildS3Key(podcastId, episodeId, fileName);
+    const key = this.buildFileKey(podcastId, episodeId, fileName);
     
     console.log(`Uploading audio file: ${filePath} -> ${key}`);
     
     try {
+      const targetPath = join(this.baseDirectory, key);
+      await this.ensureDirectoryExists(dirname(targetPath));
+      
       const fileStats = await fs.stat(filePath);
-      const fileStream = createReadStream(filePath);
       
-      const command = new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: fileStream,
-        ContentType: 'audio/mpeg',
-        ContentLength: fileStats.size,
-        ACL: this.config.settings.publicRead ? 'public-read' : 'private',
-        Metadata: {
-          'podcast-id': podcastId,
-          'episode-id': episodeId,
-          'uploaded-at': new Date().toISOString(),
-          'original-filename': fileName
-        }
-      });
-
-      const response = await this.s3Client.send(command);
+      // Copy file to storage location
+      await fs.copyFile(filePath, targetPath);
       
-      const url = await this.getPublicUrl(key);
+      const url = this.getPublicUrl(key);
+      const etag = this.generateEtag(targetPath, fileStats.size);
       
       console.log(`Upload completed: ${key} (${fileStats.size} bytes)`);
       
@@ -139,7 +96,7 @@ export class StorageManager {
         key,
         url,
         size: fileStats.size,
-        etag: response.ETag || ''
+        etag
       };
     } catch (error) {
       throw new Error(`Failed to upload audio file: ${error instanceof Error ? error.message : String(error)}`);
@@ -152,26 +109,16 @@ export class StorageManager {
     console.log(`Uploading RSS feed: ${podcastId} -> ${key}`);
     
     try {
+      const targetPath = join(this.baseDirectory, key);
+      await this.ensureDirectoryExists(dirname(targetPath));
+      
       const buffer = Buffer.from(feedContent, 'utf8');
       
-      const command = new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: buffer,
-        ContentType: 'application/rss+xml; charset=utf-8',
-        ContentLength: buffer.length,
-        ACL: this.config.settings.publicRead ? 'public-read' : 'private',
-        CacheControl: 'max-age=300', // 5 minutes cache
-        Metadata: {
-          'podcast-id': podcastId,
-          'uploaded-at': new Date().toISOString(),
-          'content-type': 'rss-feed'
-        }
-      });
-
-      const response = await this.s3Client.send(command);
+      // Write RSS content to file
+      await fs.writeFile(targetPath, buffer);
       
-      const url = await this.getPublicUrl(key);
+      const url = this.getPublicUrl(key);
+      const etag = this.generateEtag(targetPath, buffer.length);
       
       console.log(`RSS feed upload completed: ${key} (${buffer.length} bytes)`);
       
@@ -179,7 +126,7 @@ export class StorageManager {
         key,
         url,
         size: buffer.length,
-        etag: response.ETag || ''
+        etag
       };
     } catch (error) {
       throw new Error(`Failed to upload RSS feed: ${error instanceof Error ? error.message : String(error)}`);
@@ -192,28 +139,17 @@ export class StorageManager {
     console.log(`Uploading processing artifacts: ${podcastId}/${episodeId} -> ${key}`);
     
     try {
+      const targetPath = join(this.baseDirectory, key);
+      await this.ensureDirectoryExists(dirname(targetPath));
+      
       const artifactData = JSON.stringify(artifacts, null, 2);
       const buffer = Buffer.from(artifactData, 'utf8');
       
-      const command = new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: buffer,
-        ContentType: 'application/json; charset=utf-8',
-        ContentLength: buffer.length,
-        ACL: this.config.settings.publicRead ? 'public-read' : 'private',
-        CacheControl: 'max-age=3600', // 1 hour cache
-        Metadata: {
-          'podcast-id': podcastId,
-          'episode-id': episodeId,
-          'uploaded-at': new Date().toISOString(),
-          'content-type': 'processing-artifacts'
-        }
-      });
-
-      const response = await this.s3Client.send(command);
+      // Write artifacts to file
+      await fs.writeFile(targetPath, buffer);
       
-      const url = await this.getPublicUrl(key);
+      const url = this.getPublicUrl(key);
+      const etag = this.generateEtag(targetPath, buffer.length);
       
       console.log(`Processing artifacts upload completed: ${key} (${buffer.length} bytes)`);
       
@@ -221,7 +157,7 @@ export class StorageManager {
         key,
         url,
         size: buffer.length,
-        etag: response.ETag || ''
+        etag
       };
     } catch (error) {
       throw new Error(`Failed to upload processing artifacts: ${error instanceof Error ? error.message : String(error)}`);
@@ -230,91 +166,67 @@ export class StorageManager {
 
   async getRSSFeedUrl(podcastId: string): Promise<string> {
     const key = `rss/${podcastId}.xml`;
-    return await this.getPublicUrl(key);
+    return this.getPublicUrl(key);
   }
 
   async getRSSFeedContent(podcastId: string): Promise<string | null> {
     const key = `rss/${podcastId}.xml`;
+    const filePath = join(this.baseDirectory, key);
     
     try {
-      const command = new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      });
-
-      const response = await this.s3Client.send(command);
-      
-      if (!response.Body) {
+      if (!existsSync(filePath)) {
         return null;
       }
-
-      const content = await response.Body.transformToString();
+      
+      const content = await fs.readFile(filePath, 'utf8');
       return content;
     } catch (error) {
-      if ((error as any).name === 'NoSuchKey') {
-        return null;
-      }
       throw new Error(`Failed to retrieve RSS feed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   async getProcessingArtifacts(podcastId: string, episodeId: string): Promise<ProcessingArtifacts | null> {
     const key = this.buildArtifactKey(podcastId, episodeId);
+    const filePath = join(this.baseDirectory, key);
     
     console.log(`Retrieving processing artifacts: ${podcastId}/${episodeId} from ${key}`);
     
     try {
-      const command = new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      });
-
-      const response = await this.s3Client.send(command);
-      
-      if (!response.Body) {
-        throw new Error('No data received from S3');
+      if (!existsSync(filePath)) {
+        console.log(`Processing artifacts not found: ${key}`);
+        return null;
       }
-
-      const bodyContents = await response.Body.transformToString();
-      const artifacts = JSON.parse(bodyContents);
+      
+      const content = await fs.readFile(filePath, 'utf8');
+      const artifacts = JSON.parse(content);
       
       console.log(`Processing artifacts retrieved: ${key}`);
       return artifacts;
     } catch (error) {
-      if ((error as any).name === 'NoSuchKey') {
-        console.log(`Processing artifacts not found: ${key}`);
-        return null;
-      }
       throw new Error(`Failed to retrieve processing artifacts: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   async getProcessingArtifactsUrl(podcastId: string, episodeId: string): Promise<string> {
     const key = this.buildArtifactKey(podcastId, episodeId);
-    return await this.getPublicUrl(key);
+    return this.getPublicUrl(key);
   }
 
   async downloadAudio(key: string, outputPath: string): Promise<void> {
     console.log(`Downloading audio file: ${key} -> ${outputPath}`);
     
     try {
-      const command = new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      });
-
-      const response = await this.s3Client.send(command);
+      const sourcePath = join(this.baseDirectory, key);
       
-      if (!response.Body) {
-        throw new Error('No data received from S3');
+      if (!existsSync(sourcePath)) {
+        throw new Error(`File not found: ${key}`);
       }
-
-      // Ensure output directory exists
-      await fs.mkdir(join(outputPath, '..'), { recursive: true });
       
-      // Stream the response body to file
-      const writeStream = createWriteStream(outputPath);
-      await pipeline(response.Body as any, writeStream);
+      // Ensure output directory exists
+      await this.ensureDirectoryExists(dirname(outputPath));
+      
+      // Copy file to output path
+      await fs.copyFile(sourcePath, outputPath);
       
       console.log(`Download completed: ${key}`);
     } catch (error) {
@@ -326,13 +238,14 @@ export class StorageManager {
     console.log(`Deleting audio file: ${key}`);
     
     try {
-      const command = new DeleteObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      });
-
-      await this.s3Client.send(command);
-      console.log(`Deletion completed: ${key}`);
+      const filePath = join(this.baseDirectory, key);
+      
+      if (existsSync(filePath)) {
+        await fs.unlink(filePath);
+        console.log(`Deletion completed: ${key}`);
+      } else {
+        console.log(`File not found for deletion: ${key}`);
+      }
     } catch (error) {
       throw new Error(`Failed to delete audio file: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -343,13 +256,14 @@ export class StorageManager {
     console.log(`Deleting RSS feed: ${key}`);
     
     try {
-      const command = new DeleteObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      });
-
-      await this.s3Client.send(command);
-      console.log(`RSS feed deletion completed: ${key}`);
+      const filePath = join(this.baseDirectory, key);
+      
+      if (existsSync(filePath)) {
+        await fs.unlink(filePath);
+        console.log(`RSS feed deletion completed: ${key}`);
+      } else {
+        console.log(`RSS feed not found for deletion: ${key}`);
+      }
     } catch (error) {
       throw new Error(`Failed to delete RSS feed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -359,25 +273,29 @@ export class StorageManager {
     console.log(`Listing audio files with prefix: ${prefix || 'all'}`);
     
     try {
-      const command = new ListObjectsV2Command({
-        Bucket: this.bucket,
-        Prefix: prefix,
-        MaxKeys: 1000
-      });
-
-      const response = await this.s3Client.send(command);
+      const searchDir = prefix ? join(this.baseDirectory, prefix) : this.baseDirectory;
       const objects: StorageObject[] = [];
       
-      if (response.Contents) {
-        for (const obj of response.Contents) {
-          if (obj.Key && obj.Size && obj.LastModified) {
-            objects.push({
-              key: obj.Key,
-              size: obj.Size,
-              lastModified: obj.LastModified,
-              url: await this.getPublicUrl(obj.Key)
-            });
-          }
+      if (!existsSync(searchDir)) {
+        return objects;
+      }
+      
+      const files = await this.getAllFilesRecursively(searchDir);
+      
+      for (const filePath of files) {
+        try {
+          const stats = await fs.stat(filePath);
+          const relativePath = filePath.replace(this.baseDirectory + '/', '').replace(this.baseDirectory + '\\', '');
+          const key = relativePath.replace(/\\/g, '/'); // Normalize path separators
+          
+          objects.push({
+            key,
+            size: stats.size,
+            lastModified: stats.mtime,
+            url: this.getPublicUrl(key)
+          });
+        } catch (error) {
+          console.error(`Error reading file stats for ${filePath}:`, error);
         }
       }
       
@@ -391,30 +309,14 @@ export class StorageManager {
   async generatePresignedUrl(key: string, expiresIn: number = 3600): Promise<string> {
     console.log(`Generating presigned URL for: ${key} (expires in ${expiresIn}s)`);
     
-    try {
-      const command = new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      });
-
-      const url = await getSignedUrl(this.s3Client, command, {
-        expiresIn: expiresIn
-      });
-      
-      return url;
-    } catch (error) {
-      throw new Error(`Failed to generate presigned URL: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    // For local storage, we just return the public URL since we don't have presigning
+    return this.getPublicUrl(key);
   }
 
-  async getPublicUrl(key: string): Promise<string> {
-    if (this.config.settings.publicRead) {
-      // For public-read objects, construct direct URL
-      return `${this.config.endpoint}/${this.bucket}/${key}`;
-    } else {
-      // Generate presigned URL for private objects
-      return this.generatePresignedUrl(key, this.config.settings.presignedExpiry);
-    }
+  getPublicUrl(key: string): string {
+    // Clean up the key to remove any leading slashes
+    const cleanKey = key.replace(/^\/+/, '');
+    return `${this.publicUrl}/${cleanKey}`;
   }
 
   async cleanupOldFiles(olderThanDays: number): Promise<number> {
@@ -448,13 +350,8 @@ export class StorageManager {
 
   async fileExists(key: string): Promise<boolean> {
     try {
-      const command = new HeadObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      });
-
-      await this.s3Client.send(command);
-      return true;
+      const filePath = join(this.baseDirectory, key);
+      return existsSync(filePath);
     } catch (error) {
       return false;
     }
@@ -462,24 +359,35 @@ export class StorageManager {
 
   async getFileMetadata(key: string): Promise<{size: number, lastModified: Date, contentType: string} | null> {
     try {
-      const command = new HeadObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      });
-
-      const response = await this.s3Client.send(command);
+      const filePath = join(this.baseDirectory, key);
+      
+      if (!existsSync(filePath)) {
+        return null;
+      }
+      
+      const stats = await fs.stat(filePath);
+      
+      // Determine content type based on file extension
+      let contentType = 'application/octet-stream';
+      if (key.endsWith('.mp3')) {
+        contentType = 'audio/mpeg';
+      } else if (key.endsWith('.xml')) {
+        contentType = 'application/rss+xml';
+      } else if (key.endsWith('.json')) {
+        contentType = 'application/json';
+      }
       
       return {
-        size: response.ContentLength || 0,
-        lastModified: response.LastModified || new Date(),
-        contentType: response.ContentType || 'application/octet-stream'
+        size: stats.size,
+        lastModified: stats.mtime,
+        contentType
       };
     } catch (error) {
       return null;
     }
   }
 
-  private buildS3Key(podcastId: string, episodeId: string, suffix?: string): string {
+  private buildFileKey(podcastId: string, episodeId: string, suffix?: string): string {
     const datePath = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
     const cleanEpisodeId = episodeId.replace(/[^a-zA-Z0-9-_]/g, '-');
     
@@ -504,11 +412,15 @@ export class StorageManager {
   }
 
   getBucketName(): string {
-    return this.bucket;
+    return 'local-storage';
   }
 
   getEndpoint(): string {
-    return this.config.endpoint;
+    return this.publicUrl;
+  }
+
+  getBaseDirectory(): string {
+    return this.baseDirectory;
   }
 
   async deleteProcessedFiles(podcastId: string, episodeId: string): Promise<void> {
@@ -517,26 +429,16 @@ export class StorageManager {
     try {
       // List all files for this episode
       const prefix = `podcasts/${podcastId}`;
-      const command = new ListObjectsV2Command({
-        Bucket: this.bucket,
-        Prefix: prefix
-      });
-
-      const response = await this.s3Client.send(command);
+      const allFiles = await this.listAudioFiles(prefix);
       
-      if (response.Contents) {
-        const episodeFiles = response.Contents.filter(obj => 
-          obj.Key && obj.Key.includes(episodeId.replace(/[^a-zA-Z0-9-_]/g, '-'))
-        );
-        
-        for (const file of episodeFiles) {
-          if (file.Key) {
-            await this.deleteAudio(file.Key);
-          }
-        }
-        
-        console.log(`Deleted ${episodeFiles.length} files for episode ${episodeId}`);
+      const cleanEpisodeId = episodeId.replace(/[^a-zA-Z0-9-_]/g, '-');
+      const episodeFiles = allFiles.filter(obj => obj.key.includes(cleanEpisodeId));
+      
+      for (const file of episodeFiles) {
+        await this.deleteAudio(file.key);
       }
+      
+      console.log(`Deleted ${episodeFiles.length} files for episode ${episodeId}`);
     } catch (error) {
       throw new Error(`Failed to delete processed files: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -544,16 +446,52 @@ export class StorageManager {
 
   async testConnection(): Promise<boolean> {
     try {
-      const command = new ListObjectsV2Command({
-        Bucket: this.bucket,
-        MaxKeys: 1
-      });
-
-      await this.s3Client.send(command);
-      return true;
+      // Test if we can access the base directory
+      const stats = await fs.stat(this.baseDirectory);
+      return stats.isDirectory();
     } catch (error) {
       console.error('Storage connection test failed:', error);
       return false;
     }
+  }
+
+  private async ensureDirectoryExists(dirPath: string): Promise<void> {
+    try {
+      await fs.mkdir(dirPath, { recursive: true });
+    } catch (error) {
+      if ((error as any).code !== 'EEXIST') {
+        throw error;
+      }
+    }
+  }
+
+  private async getAllFilesRecursively(dir: string): Promise<string[]> {
+    const files: string[] = [];
+    
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name);
+        
+        if (entry.isDirectory()) {
+          const subFiles = await this.getAllFilesRecursively(fullPath);
+          files.push(...subFiles);
+        } else {
+          files.push(fullPath);
+        }
+      }
+    } catch (error) {
+      console.error(`Error reading directory ${dir}:`, error);
+    }
+    
+    return files;
+  }
+
+  private generateEtag(filePath: string, size: number): string {
+    // Generate a simple etag based on file path and size
+    // In a real implementation, you might want to use a hash of the file content
+    const timestamp = new Date().getTime();
+    return `"${size}-${timestamp}"`;
   }
 }

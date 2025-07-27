@@ -9,6 +9,7 @@ export interface UpstreamEpisode {
   duration: number;
   fileSize: number;
   importedAt: Date;
+  imageUrl?: string;
 }
 
 export interface ProcessingJob {
@@ -78,6 +79,8 @@ export interface ProcessingResult {
   episodeId: string;
   originalUrl: string;
   processedUrl: string;
+  originalDuration: number;
+  processedDuration: number;
   adsRemoved: AdDetection[];
   adSegments?: AdSegment[];
   chapters: Chapter[];

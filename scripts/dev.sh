@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Development script for running Podcastoor locally with Docker services
+# Development script for running Podcastoor locally (no Docker required)
 
 set -e
 
@@ -11,41 +11,29 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}Starting Podcastoor development environment...${NC}"
 
-# Load development environment variables
-if [ -f .env.development ]; then
-    export $(cat .env.development | grep -v '^#' | xargs)
-else
-    echo -e "${YELLOW}Warning: .env.development not found. Please create it from .env.development.example${NC}"
+# Check required environment variables
+if [ -z "$GEMINI_API_KEY" ]; then
+    echo -e "${YELLOW}Warning: GEMINI_API_KEY environment variable not set${NC}"
+    echo "Please set it: export GEMINI_API_KEY=your_key_here"
     exit 1
-fi
-
-# Check if Docker services are running
-if ! docker compose -f docker-compose.dev.yml ps | grep -q "podcastoor-minio.*Up"; then
-    echo -e "${GREEN}Starting Docker services (MinIO)...${NC}"
-    docker compose -f docker-compose.dev.yml up -d
-    
-    # Wait for MinIO to be healthy
-    echo "Waiting for MinIO to be ready..."
-    until docker compose -f docker-compose.dev.yml ps | grep -q "podcastoor-minio.*healthy"; do
-        sleep 1
-    done
-    echo -e "${GREEN}MinIO is ready!${NC}"
 fi
 
 # Get the project root directory
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Create necessary directories in project root
-mkdir -p "$PROJECT_ROOT/data" "$PROJECT_ROOT/tmp"
+mkdir -p "$PROJECT_ROOT/data" "$PROJECT_ROOT/tmp" "$PROJECT_ROOT/storage"
 
 # Run the processor in development mode
 echo -e "${GREEN}Starting Podcastoor processor...${NC}"
+echo -e "${YELLOW}Note: This runs locally without Docker. Storage is local filesystem-based.${NC}"
 
 # Set the config path to the root config directory using absolute path
 export CONFIG_PATH="$PROJECT_ROOT/config"
-export CONFIG_FILE="config.dev.yaml"
+export CONFIG_FILE="config.yaml"
 export DATABASE_PATH="$PROJECT_ROOT/data/podcastoor.db"
 export TEMP_DIR="$PROJECT_ROOT/tmp"
+export STORAGE_BASE_DIR="$PROJECT_ROOT/storage"
 
 # Run from packages/processor
 cd "$PROJECT_ROOT/packages/processor"

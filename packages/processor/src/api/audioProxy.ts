@@ -1,11 +1,12 @@
 import { Request, Response } from 'express';
-import { DatabaseService } from '../services/database';
+import { Database } from '../database/Database';
 import { StorageManager } from '../storage/StorageManager';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { createReadStream, existsSync, promises as fs } from 'fs';
+import { join } from 'path';
 
 export class AudioProxyService {
   constructor(
-    private db: DatabaseService,
+    private db: Database,
     private storage: StorageManager
   ) {}
   
@@ -14,20 +15,20 @@ export class AudioProxyService {
     
     try {
       // Get episode details
-      const details = await this.db.getEpisodeDetails(episodeGuid);
+      const details = this.db.getEpisodeDetails(episodeGuid);
       
-      if (!details.upstream) {
+      if (!details || !details.episode) {
         res.status(404).json({ error: 'Episode not found' });
         return;
       }
       
       // Check if processed
-      if (details.result?.processedAudioUrl) {
-        // Stream from S3/Minio
-        await this.streamProcessedAudio(details.result.processedAudioUrl, req, res);
+      if (details.processedEpisode?.processedUrl) {
+        // Stream from local storage
+        await this.streamProcessedAudio(details.processedEpisode.processedUrl, req, res);
       } else {
         // Redirect to original
-        res.redirect(307, details.upstream.audioUrl);
+        res.redirect(307, details.episode.audioUrl);
       }
     } catch (error) {
       console.error('Audio proxy error:', error);
@@ -37,17 +38,23 @@ export class AudioProxyService {
   
   private async streamProcessedAudio(url: string, req: Request, res: Response): Promise<void> {
     try {
-      // Parse S3 URL to get bucket and key
+      // Extract the file key from the URL
       const urlParts = new URL(url);
-      const pathParts = urlParts.pathname.substring(1).split('/');
-      const bucket = pathParts[0];
-      const key = pathParts.slice(1).join('/');
+      const key = urlParts.pathname.replace('/files/', '');
       
-      // Get object metadata
-      const metadata = await this.getObjectMetadata(bucket, key);
-      const fileSize = metadata.ContentLength || 0;
+      // Get the file path from storage manager
+      const filePath = this.getLocalFilePath(key);
       
-      // Handle range requests
+      if (!existsSync(filePath)) {
+        res.status(404).json({ error: 'Audio file not found' });
+        return;
+      }
+      
+      // Get file metadata
+      const stats = await fs.stat(filePath);
+      const fileSize = stats.size;
+      
+      // Handle range requests for seeking/partial content
       const range = req.headers.range;
       if (range) {
         const parts = range.replace(/bytes=/, '').split('-');
@@ -63,7 +70,7 @@ export class AudioProxyService {
           'Cache-Control': 'public, max-age=3600'
         });
         
-        const stream = await this.getObjectStream(bucket, key, { start, end });
+        const stream = createReadStream(filePath, { start, end });
         stream.pipe(res);
       } else {
         res.writeHead(200, {
@@ -72,7 +79,7 @@ export class AudioProxyService {
           'Cache-Control': 'public, max-age=3600'
         });
         
-        const stream = await this.getObjectStream(bucket, key);
+        const stream = createReadStream(filePath);
         stream.pipe(res);
       }
     } catch (error) {
@@ -81,21 +88,9 @@ export class AudioProxyService {
     }
   }
 
-  private async getObjectMetadata(bucket: string, key: string): Promise<any> {
-    // This is a simplified implementation
-    // In a real implementation, you'd use HeadObjectCommand
-    return { ContentLength: 0 };
-  }
-
-  private async getObjectStream(bucket: string, key: string, range?: { start: number; end: number }): Promise<any> {
-    // This is a simplified implementation
-    // In a real implementation, you'd create a proper S3 object stream
-    // For now, we'll return a mock stream
-    const mockStream = {
-      pipe: (response: Response) => {
-        response.end('Mock audio stream');
-      }
-    };
-    return mockStream;
+  private getLocalFilePath(key: string): string {
+    // Get the base directory from storage manager
+    const baseDirectory = this.storage.getBaseDirectory();
+    return join(baseDirectory, key);
   }
 }

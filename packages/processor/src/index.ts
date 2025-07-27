@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { PodcastProcessor } from './PodcastProcessor';
 import { createAPIServer } from './api/server';
 import { serve } from '@hono/node-server';
@@ -13,17 +14,40 @@ async function main() {
   let server: any = null;
 
   // Graceful shutdown handling
+  let shutdownInProgress = false;
+  let forcedShutdownCount = 0;
+  
   const shutdown = async (signal: string) => {
-    console.log(`Received ${signal}, shutting down gracefully...`);
+    if (shutdownInProgress) {
+      forcedShutdownCount++;
+      if (forcedShutdownCount >= 2) {
+        console.log('\nForced shutdown!');
+        process.exit(1);
+      }
+      console.log('\nShutdown in progress... Press Ctrl+C again to force quit');
+      return;
+    }
+    
+    shutdownInProgress = true;
+    console.log(`\nReceived ${signal}, shutting down...`);
+    
+    // Set a hard timeout for shutdown
+    const shutdownTimeout = setTimeout(() => {
+      console.log('\nShutdown timeout exceeded, forcing exit');
+      process.exit(1);
+    }, 5000); // 5 second hard limit
+    
     try {
       if (server) {
         console.log('Stopping HTTP server...');
         server.close();
       }
       await processor.stop();
+      clearTimeout(shutdownTimeout);
       process.exit(0);
     } catch (error) {
       console.error('Error during shutdown:', error);
+      clearTimeout(shutdownTimeout);
       process.exit(1);
     }
   };

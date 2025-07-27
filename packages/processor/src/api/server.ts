@@ -5,6 +5,25 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { PodcastProcessor } from '../PodcastProcessor';
 
+// Helper functions for RSS feed generation
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function formatTimeForPSC(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  const ms = Math.round((seconds % 1) * 1000);
+  
+  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+}
+
 export function createAPIServer(processor: PodcastProcessor) {
   const app = new Hono();
 
@@ -19,11 +38,10 @@ export function createAPIServer(processor: PodcastProcessor) {
   // Health check
   app.get('/health', async (c: Context) => {
     try {
-      const stats = await processor.getProcessingStats();
+      const health = processor.getHealthStatus();
       return c.json({
-        status: 'healthy',
         timestamp: new Date().toISOString(),
-        stats
+        ...health
       });
     } catch (error) {
       return c.json({
@@ -40,7 +58,7 @@ export function createAPIServer(processor: PodcastProcessor) {
     
     try {
       await processor.processPodcast(podcastId);
-      return c.json({ success: true, message: `Processing initiated for ${podcastId}` });
+      return c.json({ success: true, message: `Started processing podcast ${podcastId}` });
     } catch (error) {
       return c.json({ 
         success: false, 
@@ -50,10 +68,10 @@ export function createAPIServer(processor: PodcastProcessor) {
   });
 
   // Process all podcasts
-  app.post('/api/process', async (c: Context) => {
+  app.post('/api/process-all', async (c: Context) => {
     try {
       await processor.processAllPodcasts();
-      return c.json({ success: true, message: 'Processing initiated for all podcasts' });
+      return c.json({ success: true, message: 'Started processing all podcasts' });
     } catch (error) {
       return c.json({ 
         success: false, 
@@ -62,10 +80,58 @@ export function createAPIServer(processor: PodcastProcessor) {
     }
   });
 
-  // Get processing statistics
-  app.get('/api/stats', async (c: Context) => {
+  // Get all shows
+  app.get('/api/shows', async (c: Context) => {
     try {
-      const stats = await processor.getProcessingStats();
+      const db = processor.getDatabase();
+      const shows = db.getAllShows();
+      
+      // Add stats for each show
+      const showsWithStats = shows.map(show => {
+        const stats = db.getShowStats(show.id);
+        return {
+          ...show,
+          episodeCount: stats.episodeCount,
+          processedCount: stats.processedCount
+        };
+      });
+      
+      return c.json(showsWithStats);
+    } catch (error) {
+      console.error('Error fetching shows:', error);
+      return c.json({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, 500);
+    }
+  });
+
+  // Get specific show
+  app.get('/api/shows/:showId', async (c: Context) => {
+    const showId = c.req.param('showId');
+    
+    try {
+      const db = processor.getDatabase();
+      const show = db.getShow(showId);
+      
+      if (!show) {
+        return c.json({ error: 'Show not found' }, 404);
+      }
+      
+      return c.json(show);
+    } catch (error) {
+      return c.json({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, 500);
+    }
+  });
+
+  // Get show stats
+  app.get('/api/shows/:showId/stats', async (c: Context) => {
+    const showId = c.req.param('showId');
+    
+    try {
+      const db = processor.getDatabase();
+      const stats = db.getShowStats(showId);
       return c.json(stats);
     } catch (error) {
       return c.json({ 
@@ -74,100 +140,60 @@ export function createAPIServer(processor: PodcastProcessor) {
     }
   });
 
-  // Cleanup old files
-  app.post('/api/cleanup', async (c: Context) => {
-    try {
-      await processor.cleanupOldFiles();
-      return c.json({ success: true, message: 'Cleanup initiated' });
-    } catch (error) {
-      return c.json({ 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }, 500);
-    }
-  });
-
-  // Get processing artifacts for a specific episode
-  app.get('/api/artifacts/:podcastId/:episodeId', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
-    const episodeId = c.req.param('episodeId');
+  // Get show episodes
+  app.get('/api/shows/:showId/episodes', async (c: Context) => {
+    const showId = c.req.param('showId');
     
     try {
-      const storageManager = processor.getStorageManager();
-      const artifacts = await storageManager.getProcessingArtifacts(podcastId, episodeId);
+      const db = processor.getDatabase();
+      const episodes = db.getShowEpisodes(showId);
       
-      if (!artifacts) {
-        return c.json({ 
-          error: 'Artifacts not found' 
-        }, 404);
-      }
-      
-      return c.json(artifacts);
-    } catch (error) {
-      return c.json({ 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }, 500);
-    }
-  });
-
-  // Get URL to download processing artifacts
-  app.get('/api/artifacts/:podcastId/:episodeId/url', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
-    const episodeId = c.req.param('episodeId');
-    
-    try {
-      const storageManager = processor.getStorageManager();
-      const url = await storageManager.getProcessingArtifactsUrl(podcastId, episodeId);
-      
-      return c.json({ url });
-    } catch (error) {
-      return c.json({ 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }, 500);
-    }
-  });
-
-  // List all artifacts for a podcast
-  app.get('/api/artifacts/:podcastId', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
-    
-    try {
-      const storageManager = processor.getStorageManager();
-      const artifactsList = await storageManager.listAudioFiles(`artifacts/${podcastId}/`);
-      
-      // Extract episode IDs from the artifact keys
-      const episodes = artifactsList
-        .filter(obj => obj.key.endsWith('/processing-data.json'))
-        .map(obj => {
-          const parts = obj.key.split('/');
-          return {
-            episodeId: parts[2],
-            size: obj.size,
-            lastModified: obj.lastModified,
-            url: obj.url
-          };
-        });
-      
-      return c.json({ 
-        podcastId,
-        episodes 
+      // Add job status to each episode
+      const episodesWithStatus = episodes.map(episode => {
+        const jobs = db.getEpisodeJobs(episode.guid);
+        // Find the most recent completed job, or fall back to the most recent job
+        const relevantJob = jobs.find(job => job.status === 'completed') || jobs[0];
+        
+        return {
+          ...episode,
+          hasJob: jobs.length > 0,
+          jobStatus: relevantJob?.status,
+          processedAt: relevantJob?.completedAt
+        };
       });
+      
+      return c.json(episodesWithStatus);
     } catch (error) {
-      return c.json({ 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }, 500);
+      console.error('Error fetching episodes:', error);
+      return c.json([], 500);
     }
   });
 
-  // Get recently processed episodes
+  // Get recent episodes - MUST be before dynamic :episodeGuid route
   app.get('/api/episodes/recent', async (c: Context) => {
     try {
-      const db = processor.getDatabaseManager();
-      const recent = await db.getRecentlyProcessedEpisodes(20);
+      const db = processor.getDatabase();
+      const episodes = db.getRecentEpisodes(20);
+      
+      // Add show info and job status
+      const enrichedEpisodes = episodes.map(episode => {
+        const show = db.getShow(episode.showId);
+        const jobs = db.getEpisodeJobs(episode.guid);
+        // Find the most recent completed job, or fall back to the most recent job
+        const relevantJob = jobs.find(job => job.status === 'completed') || jobs[0];
+        
+        return {
+          ...episode,
+          showTitle: show?.title,
+          hasJob: jobs.length > 0,
+          jobStatus: relevantJob?.status,
+          processedAt: relevantJob?.completedAt
+        };
+      });
       
       return c.json({
-        episodes: recent,
-        count: recent.length
+        episodes: enrichedEpisodes,
+        count: enrichedEpisodes.length
       });
     } catch (error) {
       return c.json({ 
@@ -176,99 +202,19 @@ export function createAPIServer(processor: PodcastProcessor) {
     }
   });
 
-  // New manual job endpoints for refactored schema (temporarily disabled until integration is complete)
-  /*
-  app.post('/api/jobs', async (c: Context) => {
-    // Implementation will be added after PodcastProcessor integration
-    return c.json({ error: 'Manual job creation not yet available' }, 503);
-  });
-  
+  // Get episode details
   app.get('/api/episodes/:episodeGuid', async (c: Context) => {
-    // Implementation will be added after PodcastProcessor integration
-    return c.json({ error: 'Episode lookup by GUID not yet available' }, 503);
-  });
-  
-  app.get('/audio/:episodeGuid', async (c: Context) => {
-    // Implementation will be added after PodcastProcessor integration
-    return c.json({ error: 'Audio proxy not yet available' }, 503);
-  });
-  */
-  
-  // Get episodes for a specific podcast
-  app.get('/api/podcasts/:podcastId/episodes', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
-    
-    try {
-      const db = processor.getDatabaseManager();
-      const episodes = await db.getEpisodesByPodcast(podcastId);
-      
-      return c.json(episodes);
-    } catch (error) {
-      return c.json({ 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }, 500);
-    }
-  });
-  
-  // Get specific episode details
-  app.get('/api/podcasts/:podcastId/episodes/:episodeGuid', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
     const episodeGuid = c.req.param('episodeGuid');
     
     try {
-      const db = processor.getDatabaseManager();
-      const episode = await db.getEpisodeByGuid(podcastId, episodeGuid);
+      const db = processor.getDatabase();
+      const details = db.getEpisodeDetails(episodeGuid);
       
-      if (!episode) {
+      if (!details || !details.episode) {
         return c.json({ error: 'Episode not found' }, 404);
       }
       
-      // Build the EpisodeDetails response in the expected format
-      const response: any = {
-        upstream: {
-          id: episode.id,
-          podcastId: episode.podcastId,
-          episodeGuid: episode.episodeGuid,
-          title: episode.title,
-          description: episode.description,
-          audioUrl: episode.audioUrl,
-          publishDate: episode.publishDate,
-          duration: episode.duration,
-          fileSize: episode.fileSize || 0,
-          importedAt: episode.createdAt
-        },
-        chapters: [],
-        adRemovals: [],
-        llmCosts: []
-      };
-      
-      // Get processing result if available
-      if (episode.status === 'completed' && episode.processedUrl) {
-        const results = await db.getProcessingResults(podcastId);
-        const result = results.find(r => r.episodeId === episodeGuid);
-        if (result) {
-          response.result = {
-            ...result,
-            processedUrl: episode.processedUrl,
-            processingCost: episode.processingCost
-          };
-          response.chapters = result.chapters || [];
-          response.adRemovals = result.adsRemoved || [];
-          
-          // Get ad segments from artifacts
-          try {
-            const storageManager = processor.getStorageManager();
-            const artifacts = await storageManager.getProcessingArtifacts(podcastId, episodeGuid);
-            if (artifacts && artifacts.adSegments) {
-              response.adSegments = artifacts.adSegments;
-            }
-          } catch (error) {
-            console.error('Failed to get ad segments from artifacts:', error);
-          }
-        }
-      }
-      
-      return c.json(response);
+      return c.json(details);
     } catch (error) {
       console.error('Error fetching episode details:', error);
       return c.json({ 
@@ -276,197 +222,230 @@ export function createAPIServer(processor: PodcastProcessor) {
       }, 500);
     }
   });
-  
-  // Get podcast stats
-  app.get('/api/podcasts/:podcastId/stats', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
-    
+
+  // Create processing job
+  app.post('/api/jobs', async (c: Context) => {
     try {
-      const db = processor.getDatabaseManager();
-      const stats = await db.getPodcastStats(podcastId);
+      const body = await c.req.json();
+      const { episodeGuid, priority = 5 } = body;
       
-      return c.json(stats);
+      if (!episodeGuid) {
+        return c.json({ error: 'episodeGuid is required' }, 400);
+      }
+      
+      const db = processor.getDatabase();
+      const episode = db.getEpisode(episodeGuid);
+      
+      if (!episode) {
+        return c.json({ error: 'Episode not found' }, 404);
+      }
+      
+      const jobId = db.createJob(episodeGuid, priority);
+      
+      return c.json({ 
+        success: true, 
+        jobId,
+        message: `Created job ${jobId} for episode ${episodeGuid}`
+      });
     } catch (error) {
       return c.json({ 
         error: error instanceof Error ? error.message : 'Unknown error' 
       }, 500);
     }
   });
-  
-  // Ad segment endpoint
-  app.get('/api/ads/:podcastId/:episodeGuid/:adIndex', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
-    const episodeGuid = c.req.param('episodeGuid');
-    const adIndex = parseInt(c.req.param('adIndex'), 10);
-    
+
+  // Get job stats
+  app.get('/api/jobs/stats', async (c: Context) => {
     try {
-      const storageManager = processor.getStorageManager();
-      const artifacts = await storageManager.getProcessingArtifacts(podcastId, episodeGuid);
-      
-      if (!artifacts || !artifacts.adSegments) {
-        return c.json({ error: 'Ad segments not found' }, 404);
-      }
-      
-      const adSegment = artifacts.adSegments[adIndex - 1];
-      if (!adSegment) {
-        return c.json({ error: 'Ad segment not found' }, 404);
-      }
-      
-      // Return a redirect to the actual ad audio URL
-      return c.redirect(adSegment.audioUrl, 302);
+      const jobManager = processor.getJobManager();
+      return c.json(jobManager.getStats());
     } catch (error) {
-      console.error(`Failed to serve ad segment for ${podcastId}/${episodeGuid}/${adIndex}:`, error);
       return c.json({ 
         error: error instanceof Error ? error.message : 'Unknown error' 
       }, 500);
     }
   });
-  
-  // Get all ad segments for an episode
-  app.get('/api/ads/:podcastId/:episodeGuid', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
+
+
+  // Serve processed audio files
+  app.get('/audio/:episodeGuid', async (c: Context) => {
     const episodeGuid = c.req.param('episodeGuid');
     
     try {
-      const storageManager = processor.getStorageManager();
-      const artifacts = await storageManager.getProcessingArtifacts(podcastId, episodeGuid);
+      const db = processor.getDatabase();
+      const details = db.getEpisodeDetails(episodeGuid);
       
-      if (!artifacts || !artifacts.adSegments) {
-        return c.json({ adSegments: [] });
+      // Redirect to processed URL if available, otherwise original
+      if (details?.processedEpisode) {
+        return c.redirect(details.processedEpisode.processedUrl);
+      } else if (details?.episode) {
+        return c.redirect(details.episode.audioUrl);
+      } else {
+        return c.json({ error: 'Episode not found' }, 404);
       }
-      
-      return c.json({ 
-        adSegments: artifacts.adSegments,
-        count: artifacts.adSegments.length 
-      });
     } catch (error) {
-      console.error(`Failed to get ad segments for ${podcastId}/${episodeGuid}:`, error);
+      console.error('Error serving audio:', error);
       return c.json({ 
         error: error instanceof Error ? error.message : 'Unknown error' 
       }, 500);
     }
   });
-  
-  // RSS Feed Endpoints
-  
-  // Serve RSS feed directly
-  app.get('/rss/:podcastId', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
+
+  // RSS feed proxy - serves processed audio URLs
+  app.get('/rss/:showId.rss', async (c: Context) => {
+    const showId = c.req.param('showId');
     
     try {
-      const storageManager = processor.getStorageManager();
-      const rssContent = await storageManager.getRSSFeedContent(podcastId);
+      const db = processor.getDatabase();
+      const show = db.getShow(showId);
       
-      if (!rssContent) {
-        return c.text('RSS feed not found', 404);
+      if (!show) {
+        return c.json({ error: 'Show not found' }, 404);
       }
       
-      c.header('Content-Type', 'application/rss+xml; charset=utf-8');
-      c.header('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
-      return c.text(rssContent);
-    } catch (error) {
-      console.error(`Failed to serve RSS feed for ${podcastId}:`, error);
-      return c.text('RSS feed not found', 404);
-    }
-  });
-  
-  // Redirect from original RSS URL pattern to processed
-  app.get('/feed/:podcastId', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
-    return c.redirect(`/rss/${podcastId}`, 301);
-  });
-  
-  // List all available podcasts
-  app.get('/api/podcasts', async (c: Context) => {
-    try {
-      const db = processor.getDatabaseManager();
-      const podcasts = db.getAllPodcasts();
-      
-      // Add RSS feed URLs to each podcast
-      const podcastsWithFeeds = podcasts.map(podcast => ({
-        ...podcast,
-        rssFeedUrl: `${c.req.url.split('/api')[0]}/rss/${podcast.id}`,
-        alternateUrl: `${c.req.url.split('/api')[0]}/feed/${podcast.id}`
-      }));
-      
-      return c.json({
-        podcasts: podcastsWithFeeds,
-        totalCount: podcastsWithFeeds.length
-      });
-    } catch (error) {
-      return c.json({ 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }, 500);
-    }
-  });
-  
-  // Get specific podcast info with RSS URL
-  app.get('/api/podcasts/:podcastId', async (c: Context) => {
-    const podcastId = c.req.param('podcastId');
-    
-    try {
-      const db = processor.getDatabaseManager();
-      const podcast = db.getPodcast(podcastId);
-      
-      if (!podcast) {
-        return c.json({ error: 'Podcast not found' }, 404);
+      // Fetch the original RSS feed
+      const response = await fetch(show.feedUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch RSS feed: ${response.statusText}`);
       }
       
-      const episodes = await db.getEpisodesByPodcast(podcastId);
-      const processedCount = episodes.filter(ep => ep.processedUrl).length;
+      let rssContent = await response.text();
       
-      return c.json({
-        ...podcast,
-        rssFeedUrl: `${c.req.url.split('/api')[0]}/rss/${podcast.id}`,
-        alternateUrl: `${c.req.url.split('/api')[0]}/feed/${podcast.id}`,
-        episodeCount: episodes.length,
-        processedEpisodeCount: processedCount,
-        processingProgress: episodes.length > 0 ? (processedCount / episodes.length) * 100 : 0
-      });
-    } catch (error) {
-      return c.json({ 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }, 500);
-    }
-  });
-  
-  // Serve static files for the web UI
-  const staticPath = '/app/packages/web/dist';
-  
-  if (existsSync(staticPath)) {
-    console.log(`Serving static files from: ${staticPath}`);
-    
-    // Serve assets
-    app.get('/assets/*', async (c) => {
-      const path = c.req.path.replace('/assets/', '');
-      const filePath = join(staticPath, 'assets', path);
+      // Get all episodes with processed versions
+      const episodes = db.getShowEpisodes(showId);
       
-      if (existsSync(filePath)) {
-        const { readFileSync } = await import('fs');
-        const content = readFileSync(filePath);
+      // For each episode, check if we have a processed version
+      for (const episode of episodes) {
+        const jobs = db.getEpisodeJobs(episode.guid);
+        const completedJob = jobs.find(job => job.status === 'completed');
         
-        if (path.endsWith('.css')) {
-          c.header('Content-Type', 'text/css');
-        } else if (path.endsWith('.js')) {
-          c.header('Content-Type', 'application/javascript');
+        if (completedJob) {
+          const processedEpisode = db.getProcessedEpisode(completedJob.id);
+          const chapters = db.getChapters(completedJob.id);
+          
+          if (processedEpisode) {
+            // Replace the original audio URL with our processed version
+            const processedAudioUrl = processedEpisode.processedUrl;
+            
+            // Find all items with this GUID and replace their audio URLs
+            const guidPattern = episode.guid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            
+            // Create a pattern to find the item block for this episode
+            const itemPattern = new RegExp(
+              `<item>(?:[\\s\\S]*?)<guid[^>]*>${guidPattern}</guid>(?:[\\s\\S]*?)</item>`,
+              'g'
+            );
+            
+            rssContent = rssContent.replace(itemPattern, (itemBlock) => {
+              // Replace audio URL in enclosure tag
+              itemBlock = itemBlock.replace(
+                /(<enclosure[^>]*url=["'])([^"']+)([^>]*>)/g,
+                `$1${processedAudioUrl}$3`
+              );
+              
+              // Replace audio URL in media:content tag
+              itemBlock = itemBlock.replace(
+                /(<media:content[^>]*url=["'])([^"']+)([^>]*type="audio)/g,
+                `$1${processedAudioUrl}$3`
+              );
+              
+              // Update duration
+              if (processedEpisode.processedDuration) {
+                itemBlock = itemBlock.replace(
+                  /<itunes:duration>[^<]*<\/itunes:duration>/g,
+                  `<itunes:duration>${Math.round(processedEpisode.processedDuration)}</itunes:duration>`
+                );
+              }
+              
+              // Update file size in enclosure tag
+              const fileSizeInBytes = Math.round(processedEpisode.processedDuration * 128 * 1024 / 8); // Estimate based on 128kbps
+              itemBlock = itemBlock.replace(
+                /(<enclosure[^>]*length=["'])([^"']+)([^>]*>)/g,
+                `$1${fileSizeInBytes}$3`
+              );
+              
+              // Add note to title
+              itemBlock = itemBlock.replace(
+                /(<title>)([^<]*)(<\/title>)/,
+                '$1$2 [Ad-Free]$3'
+              );
+              
+              // Add note to description
+              itemBlock = itemBlock.replace(
+                /(<description><!\[CDATA\[)([^\]]*)/,
+                '$1<p><strong>[Ad-Free Version]</strong> - Ads have been automatically removed.</p>$2'
+              );
+              
+              // Add chapters if we have them
+              if (chapters && chapters.length > 0) {
+                // Add Podcast 2.0 chapters
+                const chaptersXml = chapters.map(ch => 
+                  `<podcast:chapter start="${ch.startTime}" title="${escapeXml(ch.title)}"${ch.description ? ` description="${escapeXml(ch.description)}"` : ''} />`
+                ).join('\n    ');
+                
+                // Insert chapters before the closing </item> tag
+                itemBlock = itemBlock.replace(
+                  '</item>',
+                  `  <podcast:chapters version="1.2">
+    ${chaptersXml}
+  </podcast:chapters>
+</item>`
+                );
+                
+                // Also add PSC (Podlove Simple Chapters) format for better compatibility
+                const pscChapters = chapters.map(ch => {
+                  const startTime = formatTimeForPSC(ch.startTime);
+                  return `<psc:chapter start="${startTime}" title="${escapeXml(ch.title)}" />`;
+                }).join('\n    ');
+                
+                itemBlock = itemBlock.replace(
+                  '</item>',
+                  `  <psc:chapters version="1.2">
+    ${pscChapters}
+  </psc:chapters>
+</item>`
+                );
+              }
+              
+              return itemBlock;
+            });
+          }
         }
-        
-        return c.body(content);
       }
-      return c.notFound();
-    });
-    
-    // Serve index.html for all non-API routes
-    app.get('*', async (c) => {
-      const indexPath = join(staticPath, 'index.html');
-      if (existsSync(indexPath)) {
-        const { readFileSync } = await import('fs');
-        const html = readFileSync(indexPath, 'utf-8');
-        return c.html(html);
-      }
-      return c.text('Web UI not found', 404);
-    });
+      
+      // Set appropriate headers
+      c.header('Content-Type', 'application/rss+xml; charset=utf-8');
+      c.header('Cache-Control', 'public, max-age=300'); // Cache for 5 minutes
+      
+      return c.body(rssContent);
+      
+    } catch (error) {
+      console.error('Error serving RSS feed:', error);
+      return c.json({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }, 500);
+    }
+  });
+
+  // Redirect old RSS URLs to new format
+  app.get('/rss/:showId', async (c: Context) => {
+    const showId = c.req.param('showId');
+    return c.redirect(`/rss/${showId}.rss`, 301);
+  });
+
+  // Serve static files from storage
+  if (process.env.NODE_ENV === 'development') {
+    const storagePath = join(process.cwd(), 'data', 'storage');
+    console.log('Serving static files from:', storagePath);
+    if (existsSync(storagePath)) {
+      app.use('/files/*', serveStatic({ 
+        root: storagePath,
+        rewriteRequestPath: (path) => path.replace(/^\/files/, '')
+      }));
+    } else {
+      console.warn('Storage path does not exist:', storagePath);
+    }
   }
-  
+
   return app;
 }

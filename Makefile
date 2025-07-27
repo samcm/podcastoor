@@ -9,14 +9,13 @@ help: ## Show this help message
 	@echo ""
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-setup: ## Initial setup - copy .env.example to .env
-	@if [ ! -f .env ]; then \
-		cp .env.example .env; \
-		echo "✅ Created .env file from .env.example"; \
-		echo "⚠️  Please edit .env and add your API keys"; \
-	else \
-		echo "✅ .env file already exists"; \
-	fi
+setup: ## Initial setup - install dependencies
+	@echo "📦 Installing dependencies..."
+	pnpm install
+	@echo "🔨 Building packages..."
+	pnpm build
+	@echo "✅ Setup complete!"
+	@echo "ℹ️  Set GEMINI_API_KEY environment variable before running"
 
 start: ## Start all services
 	@echo "🚀 Starting Podcastoor services..."

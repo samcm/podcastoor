@@ -10,9 +10,9 @@ export const PodcastConfigSchema = z.object({
     removeAds: z.boolean(),
     generateChapters: z.boolean(),
     transcriptionModel: z.string().min(1),
-    adDetectionModel: z.string().min(1),
     chunkSizeMinutes: z.number().positive(),
-    overlapSeconds: z.number().nonnegative()
+    overlapSeconds: z.number().nonnegative(),
+    minAdDuration: z.number().nonnegative().optional()
   })
 });
 

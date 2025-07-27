@@ -10,12 +10,6 @@ export interface LLMConfig {
   models: {
     geminiAudio: string;
   };
-  maxTokens: number;
-  temperature: number;
-  timeoutMs: number;
-  costLimits: {
-    maxCostPerEpisode: number;
-  };
 }
 
 export interface LLMUsage {
@@ -244,13 +238,25 @@ export class LLMOrchestrator {
     }
   }
 
-  async refineAdDetection(audioAnalysis: AudioAnalysisResult): Promise<AdDetection[]> {
+  async refineAdDetection(audioAnalysis: AudioAnalysisResult, minAdDuration: number = 3): Promise<AdDetection[]> {
     console.log(`Stage 2: Ad detection already complete in Gemini analysis`);
     console.log(`Ad detection: ${audioAnalysis.adsDetected.length} ads detected`);
     
-    // Since Gemini now does both audio and text-based ad detection,
-    // we can just return the ads detected by Gemini
-    return audioAnalysis.adsDetected;
+    // Filter ads by minimum duration
+    const filteredAds = audioAnalysis.adsDetected.filter(ad => {
+      const duration = ad.endTime - ad.startTime;
+      const meetsMinimum = duration >= minAdDuration;
+      
+      if (!meetsMinimum) {
+        console.log(`⏭️  Ignoring ad segment (${duration.toFixed(1)}s < ${minAdDuration}s minimum): ${ad.startTime.toFixed(2)}s - ${ad.endTime.toFixed(2)}s`);
+      }
+      
+      return meetsMinimum;
+    });
+    
+    console.log(`🎯 Filtered ads by minimum duration (${minAdDuration}s): ${audioAnalysis.adsDetected.length} → ${filteredAds.length} ads`);
+    
+    return filteredAds;
   }
 
   async generateChapters(audioAnalysis: AudioAnalysisResult): Promise<Chapter[]> {
@@ -284,25 +290,31 @@ export class LLMOrchestrator {
    - Abrupt topic changes to commercial content
    - Call-to-action language
 
+   Other considerations:
+   - Commercial content is not always marked as ads. For example, if a podcast talks about a live show that they are presenting, that is not an ad. 
+   - If you aren't sure, don't mark it as an ad.
+   - Combine audio indicators with text indicators to make a decision.
+
+   For each detected ad, provide:
+    - startTime: seconds from start
+    - endTime: seconds from start
+    - confidence: 0.0 to 1.0
+    - adType: "pre-roll", "mid-roll", "post-roll", or "embedded"
+    - description: what was detected. e.g. "An ad for product x"
+    - detectionReason: "AUDIO_QUALITY_CHANGE", "VOLUME_CHANGE", "ACOUSTIC_CHANGE", "TEXT_CONTENT", "COMBINED" or anything else you think is relevant
+
 2. CHAPTERS: Create meaningful chapters based on natural topic transitions. Ensure:
-   - Chapters are at least 2 minutes long
+   - Chapters are at least 5 minutes long
    - Avoid creating chapter breaks during ad segments
    - Use concise titles (1-3 words)
    - Focus on high-level topic changes, not minor transitions
+   - Chapters should span distinct topics, not just minor changes in topic. For example, if a podcast talks about 5 different NRL topics in a window of 10 minutes, there should be 1 chapter titled "NRL" that spans the entire 10 minute period.
 
-For each detected ad, provide:
-- startTime: seconds from start
-- endTime: seconds from start
-- confidence: 0.0 to 1.0
-- adType: "pre-roll", "mid-roll", "post-roll", or "embedded"
-- description: what was detected
-- detectionReason: "AUDIO_QUALITY_CHANGE", "VOLUME_CHANGE", "ACOUSTIC_CHANGE", "TEXT_CONTENT", or "COMBINED"
-
-For each chapter, provide:
-- title: concise chapter title (1-3 words)
-- startTime: seconds from start
-- endTime: seconds from start
-- description: optional brief description
+  For each chapter, provide:
+  - title: concise chapter title (1-3 words)
+  - startTime: seconds from start
+  - endTime: seconds from start
+  - description: optional brief description
 
 Be comprehensive in ad detection but conservative - only mark content as ads if you're confident.`;
   }

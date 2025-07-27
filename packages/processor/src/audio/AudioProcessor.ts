@@ -1,8 +1,8 @@
 import { spawn, ChildProcess } from 'child_process';
-import { createReadStream, createWriteStream, promises as fs } from 'fs';
+import { createReadStream, createWriteStream, promises as fs, mkdirSync } from 'fs';
 import { promisify } from 'util';
 import { pipeline } from 'stream';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { AdDetection, AudioMetadata } from '@podcastoor/shared';
 
 const pipelineAsync = promisify(pipeline);
@@ -25,6 +25,9 @@ export class AudioProcessor {
     this.tempDirectory = options.tempDirectory;
     this.maxDuration = options.maxDuration || 14400; // 4 hours
     this.timeoutMs = options.timeoutMs || 3600000; // 1 hour
+    
+    // Ensure temp directory exists
+    mkdirSync(this.tempDirectory, { recursive: true });
   }
 
   async downloadAudio(url: string, episodeGuid: string): Promise<string> {
@@ -215,7 +218,8 @@ export class AudioProcessor {
   private async concatenateSegments(segmentFiles: string[], outputPath: string): Promise<void> {
     // Create concat file list
     const concatFile = join(this.tempDirectory, `concat_${Date.now()}.txt`);
-    const concatContent = segmentFiles.map(file => `file '${file}'`).join('\n');
+    // Use absolute paths to avoid relative path issues
+    const concatContent = segmentFiles.map(file => `file '${resolve(file)}'`).join('\n');
     
     await fs.writeFile(concatFile, concatContent, 'utf8');
 

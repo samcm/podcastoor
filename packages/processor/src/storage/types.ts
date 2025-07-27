@@ -1,12 +1,7 @@
 export interface StorageProviderConfig {
-  type: 'minio' | 'r2' | 's3';
-  endpoint: string;
-  region?: string;
-  credentials: {
-    accessKeyId: string;
-    secretAccessKey: string;
-  };
-  bucket: string;
+  type: 'local';
+  baseDirectory: string;
+  publicUrl?: string;
 }
 
 export interface UploadOptions {

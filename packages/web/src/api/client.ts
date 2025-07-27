@@ -1,110 +1,180 @@
-import { EpisodeDetails, CreateJobRequest, JobStatusResponse } from '@podcastoor/shared';
+const API_BASE = (import.meta as any).env?.VITE_API_URL || '/api';
 
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+export interface Show {
+  id: string;
+  title: string;
+  description?: string;
+  feedUrl: string;
+  createdAt: Date;
+  updatedAt: Date;
+  episodeCount?: number;
+  processedCount?: number;
+}
+
+export interface Episode {
+  guid: string;
+  showId: string;
+  title: string;
+  description: string;
+  audioUrl: string;
+  publishDate: Date;
+  duration: number;
+  showTitle?: string;
+  hasJob?: boolean;
+  jobStatus?: string;
+  processedAt?: Date;
+}
+
+export interface Job {
+  id: number;
+  episodeGuid: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  error?: string;
+  priority: number;
+  createdAt: Date;
+  startedAt?: Date;
+  completedAt?: Date;
+}
+
+export interface ProcessedEpisode {
+  jobId: number;
+  processedUrl: string;
+  originalDuration: number;
+  processedDuration: number;
+  processingCost?: number;
+  createdAt: Date;
+}
+
+export interface Chapter {
+  title: string;
+  startTime: number;
+  endTime: number;
+  description?: string;
+}
+
+export interface AdDetection {
+  startTime: number;
+  endTime: number;
+  confidence: number;
+  adType?: string;
+  description: string;
+}
+
+export interface EpisodeDetails {
+  episode: Episode;
+  job: Job | null;
+  processedEpisode: ProcessedEpisode | null;
+  chapters: Chapter[];
+  ads: AdDetection[];
+}
+
+export interface ShowStats {
+  episodeCount: number;
+  processedCount: number;
+  totalAdsRemoved: number;
+  totalTimeSaved: number;
+  averageAdsPerEpisode: number;
+}
+
+export interface HealthStatus {
+  status: string;
+  timestamp: string;
+  shows: number;
+  jobs: {
+    pending: number;
+    processing: number;
+    completed: number;
+    failed: number;
+  };
+  lastProcessingRun: Date;
+}
 
 export const api = {
-  // Episode endpoints
-  async getEpisode(episodeGuid: string, podcastId?: string): Promise<EpisodeDetails> {
-    // For now, we need to extract the podcastId from the URL or pass it
-    if (!podcastId) {
-      // Try to extract from current URL if we're on an episode page
-      const pathParts = window.location.pathname.split('/');
-      const showsIndex = pathParts.indexOf('shows');
-      if (showsIndex !== -1 && pathParts[showsIndex + 1]) {
-        podcastId = pathParts[showsIndex + 1];
-      }
-    }
-    
-    if (!podcastId) {
-      throw new Error('Podcast ID is required to fetch episode');
-    }
-    
-    const res = await fetch(`${API_BASE}/podcasts/${podcastId}/episodes/${episodeGuid}`);
-    if (!res.ok) throw new Error('Failed to fetch episode');
-    return res.json();
-  },
-  
-  async getShowEpisodes(podcastId: string): Promise<EpisodeDetails[]> {
-    const res = await fetch(`${API_BASE}/shows/${podcastId}/episodes`);
-    if (!res.ok) throw new Error('Failed to fetch episodes');
-    return res.json();
-  },
-  
-  // Job endpoints
-  async createJob(episodeGuid: string, priority?: number): Promise<{ jobId: number }> {
-    const res = await fetch(`${API_BASE}/jobs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ episodeGuid, priority } as CreateJobRequest)
-    });
-    if (!res.ok) throw new Error('Failed to create job');
-    return res.json();
-  },
-  
-  async getJobStatus(jobId: number): Promise<JobStatusResponse> {
-    const res = await fetch(`${API_BASE}/jobs/${jobId}`);
-    if (!res.ok) throw new Error('Failed to fetch job status');
-    return res.json();
-  },
-  
-  async retryJob(jobId: number): Promise<void> {
-    const res = await fetch(`${API_BASE}/jobs/${jobId}/retry`, {
-      method: 'POST'
-    });
-    if (!res.ok) throw new Error('Failed to retry job');
-  },
-  
-  // Audio URL helper
-  getAudioUrl(episodeGuid: string): string {
-    return `/audio/${episodeGuid}`;
-  },
-  
-  // RSS URL helper
-  getRssUrl(podcastId: string): string {
-    return `/rss/${podcastId}`;
-  },
-
-  // Legacy endpoints (for backward compatibility during transition)
-  async getPodcasts(): Promise<{ podcasts: any[], totalCount: number }> {
-    const res = await fetch(`${API_BASE}/podcasts`);
-    if (!res.ok) throw new Error('Failed to fetch podcasts');
-    return res.json();
-  },
-
-  async getPodcast(podcastId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/podcasts/${podcastId}`);
-    if (!res.ok) throw new Error('Failed to fetch podcast');
-    return res.json();
-  },
-
-  async getPodcastEpisodes(podcastId: string): Promise<any[]> {
-    const res = await fetch(`${API_BASE}/podcasts/${podcastId}/episodes`);
-    if (!res.ok) throw new Error('Failed to fetch podcast episodes');
-    return res.json();
-  },
-
-  async getHealth(): Promise<any> {
-    const res = await fetch(`${API_BASE.replace('/api', '')}/health`);
+  // Health check
+  async getHealth(): Promise<HealthStatus> {
+    const res = await fetch('/health');
     if (!res.ok) throw new Error('Failed to fetch health status');
     return res.json();
   },
 
-  async getRecentEpisodes(): Promise<{ episodes: any[] }> {
+  // Shows
+  async getShows(): Promise<Show[]> {
+    const res = await fetch(`${API_BASE}/shows`);
+    if (!res.ok) throw new Error('Failed to fetch shows');
+    return res.json();
+  },
+
+  async getShow(showId: string): Promise<Show> {
+    const res = await fetch(`${API_BASE}/shows/${showId}`);
+    if (!res.ok) throw new Error('Failed to fetch show');
+    return res.json();
+  },
+
+  async getShowStats(showId: string): Promise<ShowStats> {
+    const res = await fetch(`${API_BASE}/shows/${showId}/stats`);
+    if (!res.ok) throw new Error('Failed to fetch show stats');
+    return res.json();
+  },
+
+  async getShowEpisodes(showId: string): Promise<Episode[]> {
+    const res = await fetch(`${API_BASE}/shows/${showId}/episodes`);
+    if (!res.ok) throw new Error('Failed to fetch episodes');
+    return res.json();
+  },
+
+  // Episodes
+  async getEpisode(episodeGuid: string): Promise<EpisodeDetails> {
+    const res = await fetch(`${API_BASE}/episodes/${episodeGuid}`);
+    if (!res.ok) throw new Error('Failed to fetch episode');
+    return res.json();
+  },
+
+  async getRecentEpisodes(): Promise<{ episodes: Episode[]; count: number }> {
     const res = await fetch(`${API_BASE}/episodes/recent`);
     if (!res.ok) throw new Error('Failed to fetch recent episodes');
     return res.json();
   },
 
-  async getPodcastStats(podcastId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/podcasts/${podcastId}/stats`);
-    if (!res.ok) throw new Error('Failed to fetch podcast stats');
+  // Jobs
+  async createJob(episodeGuid: string, priority?: number): Promise<{ success: boolean; jobId: number; message: string }> {
+    const res = await fetch(`${API_BASE}/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeGuid, priority })
+    });
+    if (!res.ok) throw new Error('Failed to create job');
     return res.json();
   },
 
-  async processPodcast(podcastId: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/podcasts/${podcastId}/process`, {
+  async getJobStats(): Promise<{ isRunning: boolean; runningJobs: number; maxConcurrency: number; jobStats: any }> {
+    const res = await fetch(`${API_BASE}/jobs/stats`);
+    if (!res.ok) throw new Error('Failed to fetch job stats');
+    return res.json();
+  },
+
+  // Processing
+  async processShow(showId: string): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${API_BASE}/process/${showId}`, {
       method: 'POST'
     });
-    if (!res.ok) throw new Error('Failed to process podcast');
+    if (!res.ok) throw new Error('Failed to process show');
+    return res.json();
+  },
+
+  async processAll(): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${API_BASE}/process-all`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to process all shows');
+    return res.json();
+  },
+
+  // Audio
+  getAudioUrl(episodeGuid: string): string {
+    return `/audio/${episodeGuid}`;
   }
 };
+
+// Legacy type exports for compatibility
+export type Podcast = Show;
+export type PodcastStats = ShowStats;

@@ -92,7 +92,8 @@ export class RSSProcessor {
           description: item.description || item.contentSnippet || '',
           audioUrl,
           publishDate: item.pubDate ? new Date(item.pubDate) : new Date(),
-          duration: this.parseDuration(item['itunes:duration'] || '0')
+          duration: this.parseDuration(item['itunes:duration'] || '0'),
+          imageUrl: this.extractEpisodeImage(item, feed)
         };
       });
 
@@ -370,6 +371,42 @@ export class RSSProcessor {
     }
 
     return undefined;
+  }
+
+  private extractEpisodeImage(item: any, feed: any): string | undefined {
+    // Try episode-specific iTunes image first
+    if (item['itunes:image']) {
+      if (typeof item['itunes:image'] === 'string') {
+        return item['itunes:image'];
+      }
+      if (item['itunes:image'].href) {
+        return item['itunes:image'].href;
+      }
+    }
+
+    // Try episode image element
+    if (item.image?.url) {
+      return item.image.url;
+    }
+
+    // Try extracting from description/content for embedded images
+    if (item.description) {
+      const imgMatch = item.description.match(/<img[^>]+src="([^">]+)"/i);
+      if (imgMatch) {
+        return imgMatch[1];
+      }
+    }
+
+    if (item['content:encoded']) {
+      const imgMatch = item['content:encoded'].match(/<img[^>]+src="([^">]+)"/i);
+      if (imgMatch) {
+        return imgMatch[1];
+      }
+    }
+
+    // Fall back to podcast-level artwork
+    const podcastImage = this.extractImage(feed);
+    return podcastImage?.url;
   }
 
   private extractCategories(feed: any): string[] {

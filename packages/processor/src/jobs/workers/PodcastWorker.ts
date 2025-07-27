@@ -1,18 +1,8 @@
 import { AdDetection, AdSegment, Chapter, ProcessingArtifacts, ProcessingResult } from '@podcastoor/shared';
-import { PodcastJobData } from '../JobManager';
 import { AudioProcessor } from '../../audio/AudioProcessor';
 import { LLMOrchestrator } from '../../llm/LLMOrchestrator';
 import { StorageManager } from '../../storage/StorageManager';
 import { RSSProcessor } from '../../rss/RSSProcessor';
-import { join } from 'path';
-import { randomUUID } from 'crypto';
-
-interface Job {
-  id: number;
-  data: PodcastJobData;
-  updateProgress(percentage: number): Promise<void>;
-  attemptsMade: number;
-}
 
 export class PodcastWorker {
   constructor(
@@ -22,26 +12,34 @@ export class PodcastWorker {
     private rssProcessor: RSSProcessor
   ) {}
 
-  async processPodcastEpisode(job: Job): Promise<ProcessingResult> {
-    const { podcastId, episodeGuid, audioUrl } = job.data;
+  async process(data: {
+    podcastId: string;
+    episodeId: string;
+    audioUrl: string;
+    minAdDuration: number;
+    episodeTitle: string;
+    duration: number;
+    jobId: number;
+  }): Promise<ProcessingResult> {
+    const { podcastId, episodeId, audioUrl, minAdDuration, jobId } = data;
     const startTime = Date.now();
     
-    console.log(`🔧 PodcastWorker processing: ${podcastId}/${episodeGuid}`);
+    console.log(`🔧 PodcastWorker processing: ${podcastId}/${episodeId}`);
     
     try {
       // Stage 1: Download audio
-      await job.updateProgress(10);
+      console.log(`[Job ${jobId}] Progress: 10% - Starting download`);
       console.log(`⬇️  Stage 1/8: Downloading audio from ${audioUrl}`);
       const downloadStartTime = Date.now();
       
-      const audioPath = await this.audioProcessor.downloadAudio(audioUrl, episodeGuid);
+      const audioPath = await this.audioProcessor.downloadAudio(audioUrl, episodeId);
       const audioMetadata = await this.audioProcessor.extractMetadata(audioPath);
       
       const downloadTime = Date.now() - downloadStartTime;
       console.log(`✅ Audio downloaded (${(downloadTime / 1000).toFixed(1)}s): ${audioMetadata.duration}s duration, ${(audioMetadata.size / 1024 / 1024).toFixed(1)}MB`);
       
       // Stage 2: Analyze audio (transcription + initial ad detection)
-      await job.updateProgress(30);
+      console.log(`[Job ${jobId}] Progress: 30% - Analyzing audio`);
       console.log(`🎤 Stage 2/8: Analyzing audio (transcription + initial ad detection)...`);
       const analysisStartTime = Date.now();
       
@@ -52,11 +50,11 @@ export class PodcastWorker {
       console.log(`🎯 Initial ad detection: ${audioAnalysis.adsDetected.length} potential ad segments`);
       
       // Stage 3: Refine ad detection
-      await job.updateProgress(50);
+      console.log(`[Job ${jobId}] Progress: 50% - Refining ad detection`);
       console.log(`🎯 Stage 3/8: Refining ad detection...`);
       const adRefinementStartTime = Date.now();
       
-      const finalAds = await this.llmOrchestrator.refineAdDetection(audioAnalysis);
+      const finalAds = await this.llmOrchestrator.refineAdDetection(audioAnalysis, minAdDuration);
       
       const adRefinementTime = Date.now() - adRefinementStartTime;
       console.log(`✅ Ad detection refinement completed (${(adRefinementTime / 1000).toFixed(1)}s): Found ${finalAds.length} final ad segments`);
@@ -72,7 +70,7 @@ export class PodcastWorker {
       }
       
       // Stage 4: Generate chapters
-      await job.updateProgress(60);
+      console.log(`[Job ${jobId}] Progress: 60% - Generating chapters`);
       console.log(`📚 Stage 4/8: Generating chapters...`);
       const chaptersStartTime = Date.now();
       
@@ -82,7 +80,7 @@ export class PodcastWorker {
       console.log(`✅ Chapters generated (${(chaptersTime / 1000).toFixed(1)}s): ${chapters.length} chapters`);
       
       // Stage 5: Process audio (remove ads and extract ad segments)
-      await job.updateProgress(70);
+      console.log(`[Job ${jobId}] Progress: 70% - Processing audio`);
       console.log(`✂️  Stage 5/8: Processing audio (removing ${finalAds.length} ad segments)...`);
       const audioProcessingStartTime = Date.now();
       
@@ -93,7 +91,7 @@ export class PodcastWorker {
       let adSegments: AdSegment[] = [];
       if (finalAds.length > 0) {
         console.log(`🎯 Extracting ${finalAds.length} ad segments...`);
-        const adPaths = await this.audioProcessor.extractAdSegments(audioPath, finalAds, episodeGuid);
+        const adPaths = await this.audioProcessor.extractAdSegments(audioPath, finalAds, episodeId);
         
         // Upload each ad segment
         for (let i = 0; i < adPaths.length; i++) {
@@ -104,7 +102,7 @@ export class PodcastWorker {
             const adUploadResult = await this.storageManager.uploadAdSegment(
               adPath,
               podcastId,
-              episodeGuid,
+              episodeId,
               i + 1,
               ad.adType
             );
@@ -137,24 +135,24 @@ export class PodcastWorker {
       console.log(`📊 Final audio: ${processedMetadata.duration}s duration, ${(processedMetadata.size / 1024 / 1024).toFixed(1)}MB`);
       
       // Stage 6: Upload processed audio
-      await job.updateProgress(85);
+      console.log(`[Job ${jobId}] Progress: 85% - Uploading processed audio`);
       console.log(`☁️  Stage 6/8: Uploading processed audio...`);
       const uploadStartTime = Date.now();
       
-      const uploadResult = await this.storageManager.uploadAudio(processedPath, podcastId, episodeGuid);
+      const uploadResult = await this.storageManager.uploadAudio(processedPath, podcastId, episodeId);
       
       const uploadTime = Date.now() - uploadStartTime;
       console.log(`✅ Upload completed (${(uploadTime / 1000).toFixed(1)}s): ${uploadResult.url}`);
       
       // Stage 7: Upload processing artifacts
-      await job.updateProgress(95);
+      console.log(`[Job ${jobId}] Progress: 95% - Uploading artifacts`);
       console.log(`💾 Stage 7/8: Uploading processing artifacts...`);
       const artifactUploadStartTime = Date.now();
       
       // Prepare artifacts data
       const artifacts: ProcessingArtifacts = {
         podcastId,
-        episodeId: episodeGuid,
+        episodeId: episodeId,
         processedAt: new Date().toISOString(),
         audioMetadata: {
           original: audioMetadata,
@@ -176,13 +174,13 @@ export class PodcastWorker {
         timeSaved: timeSaved
       };
       
-      const artifactUploadResult = await this.storageManager.uploadProcessingArtifacts(podcastId, episodeGuid, artifacts);
+      const artifactUploadResult = await this.storageManager.uploadProcessingArtifacts(podcastId, episodeId, artifacts);
       
       const artifactUploadTime = Date.now() - artifactUploadStartTime;
       console.log(`✅ Artifacts uploaded (${(artifactUploadTime / 1000).toFixed(1)}s): ${artifactUploadResult.url}`);
       
       // Stage 8: Complete
-      await job.updateProgress(100);
+      console.log(`[Job ${jobId}] Progress: 100% - Processing complete`);
       console.log(`🎉 Stage 8/8: Processing complete!`);
       
       // Get actual cost from LLM usage tracking
@@ -192,9 +190,11 @@ export class PodcastWorker {
       
       const result: ProcessingResult = {
         podcastId,
-        episodeId: episodeGuid,
+        episodeId: episodeId,
         originalUrl: audioUrl,
         processedUrl: uploadResult.url,
+        originalDuration: audioMetadata.duration,
+        processedDuration: processedMetadata.duration,
         adsRemoved: finalAds,
         adSegments: adSegments,
         chapters: chapters,
@@ -202,27 +202,26 @@ export class PodcastWorker {
         processedAt: new Date()
       };
       
-      console.log(`🏁 Episode processing completed: ${podcastId}/${episodeGuid} (${(totalTime / 1000).toFixed(1)}s total)`);
+      console.log(`🏁 Episode processing completed: ${podcastId}/${episodeId} (${(totalTime / 1000).toFixed(1)}s total)`);
       console.log(`💰 Total processing cost: $${totalCost.toFixed(4)}`);
       
       return result;
     } catch (error) {
-      await this.handleProcessingError(error as Error, job);
+      await this.handleProcessingError(error as Error, jobId, podcastId, episodeId);
       throw error;
     }
   }
 
-  private async handleProcessingError(error: Error, job: Job): Promise<void> {
-    console.error(`❌ Processing error for job ${job.id}:`, error.message);
+  private async handleProcessingError(error: Error, jobId: number, podcastId: string, episodeId: string): Promise<void> {
+    console.error(`❌ Processing error for job ${jobId}:`, error.message);
     
     // Log error details
     const errorDetails = {
-      jobId: job.id,
-      podcastId: job.data.podcastId,
-      episodeId: job.data.episodeGuid,
+      jobId: jobId,
+      podcastId: podcastId,
+      episodeId: episodeId,
       error: error.message,
       stack: error.stack,
-      attempt: job.attemptsMade,
       timestamp: new Date().toISOString()
     };
     

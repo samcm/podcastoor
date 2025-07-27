@@ -12,6 +12,7 @@ export interface ProcessingOptions {
   generateChapters: boolean;
   chunkSizeMinutes: number;
   overlapSeconds: number;
+  minAdDuration?: number;
 }
 
 export interface AdDetection {
@@ -43,6 +44,7 @@ export interface Episode {
   audioUrl: string;
   publishDate: Date;
   duration: number;
+  imageUrl?: string;
 }
 
 export interface ProcessedEpisode extends Episode {
@@ -70,12 +72,6 @@ export interface StorageConfig {
   secretAccessKey: string;
 }
 
-export interface JobConfig {
-  dbPath: string;
-  concurrency: number;
-  retryAttempts: number;
-  processingTimeoutMs: number;
-}
 
 export interface ProcessingArtifacts {
   podcastId: string;

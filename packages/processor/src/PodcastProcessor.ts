@@ -1,16 +1,16 @@
 import cron from 'node-cron';
 import { ConfigManager } from './config/ConfigManager';
 import { JobManager } from './jobs/JobManager';
-import { DatabaseManager } from './database/DatabaseManager';
+import { Database } from './database/Database';
 import { RSSProcessor } from './rss/RSSProcessor';
 import { StorageManager } from './storage/StorageManager';
 import { AudioProcessor } from './audio/AudioProcessor';
 import { LLMOrchestrator } from './llm/LLMOrchestrator';
-import { PodcastConfig, ProcessingResult } from '@podcastoor/shared';
+import { ProcessingResult } from '@podcastoor/shared';
 
 export class PodcastProcessor {
   private config: ConfigManager;
-  private database!: DatabaseManager;
+  private database!: Database;
   private jobManager!: JobManager;
   private rssProcessor!: RSSProcessor;
   private storageManager!: StorageManager;
@@ -49,50 +49,44 @@ export class PodcastProcessor {
   }
 
   async stop(): Promise<void> {
-    if (!this.isRunning) {
-      console.log('PodcastProcessor not running');
-      return;
-    }
-
     console.log('Stopping PodcastProcessor...');
-
-    try {
-      this.cronJobs.forEach((task, name) => {
-        task.stop();
-        console.log(`Stopped cron job: ${name}`);
-      });
-      this.cronJobs.clear();
-
-      this.config.stopWatching();
+    
+    // Stop cron jobs
+    this.cronJobs.forEach((job, name) => {
+      console.log(`Stopping cron job: ${name}`);
+      job.stop();
+    });
+    this.cronJobs.clear();
+    
+    // Stop services
+    if (this.jobManager) {
       await this.jobManager.stop();
-
-      if (this.audioProcessor) {
-        await this.audioProcessor.cleanup();
-      }
-
-      this.database.close();
-      this.isRunning = false;
-      console.log('PodcastProcessor stopped');
-    } catch (error) {
-      console.error('Error stopping PodcastProcessor:', error);
     }
+    
+    if (this.config) {
+      this.config.stopWatching();
+    }
+    
+    if (this.database) {
+      this.database.close();
+    }
+    
+    this.isRunning = false;
+    console.log('PodcastProcessor stopped');
   }
 
   async processAllPodcasts(): Promise<void> {
     console.log('Processing all enabled podcasts...');
-
-    try {
-      const podcasts = await this.config.loadPodcasts();
-      console.log(`Found ${podcasts.length} enabled podcasts`);
-
-      for (const podcast of podcasts) {
-        await this.processPodcast(podcast.id);
-      }
-
-      console.log('All podcasts processed');
-    } catch (error) {
-      console.error('Failed to process all podcasts:', error);
+    
+    const allPodcasts = await this.config.getAllPodcasts();
+    const enabledPodcasts = allPodcasts.filter(p => p.enabled);
+    console.log(`Found ${enabledPodcasts.length} enabled podcasts`);
+    
+    for (const podcast of enabledPodcasts) {
+      await this.processPodcast(podcast.id);
     }
+    
+    console.log('All podcasts processed');
   }
 
   async processPodcast(podcastId: string): Promise<void> {
@@ -109,26 +103,12 @@ export class PodcastProcessor {
         return;
       }
 
-      // Check if we need to fetch RSS (avoid unnecessary fetches)
-      const state = await this.database.getPodcastState(podcastId);
-      const now = new Date();
-      const lastFetch = state?.lastRSSFetch || new Date(0);
-      const hoursSinceLastFetch = (now.getTime() - lastFetch.getTime()) / (1000 * 60 * 60);
-
-      if (hoursSinceLastFetch < 1) {
-        console.log(`RSS recently fetched for ${podcastId}, skipping`);
-        
-        // Still queue any unprocessed episodes
-        await this.queueUnprocessedEpisodes(podcastId);
-        return;
-      }
-
       // Fetch RSS feed
       const feed = await this.rssProcessor.fetchFeed(podcast.rssUrl);
       console.log(`Fetched RSS feed: ${feed.title} (${feed.episodes.length} episodes)`);
 
-      // Save/update podcast information in database
-      await this.database.savePodcast(podcastId, feed.title, feed.description, podcast.rssUrl);
+      // Save/update show information
+      this.database.upsertShow(podcastId, feed.title, feed.description, podcast.rssUrl);
 
       // Calculate retention cutoff date
       const retentionDays = podcast.retentionDays || this.config.getProcessingConfig().defaultRetentionDays;
@@ -136,8 +116,8 @@ export class PodcastProcessor {
       cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
       console.log(`Retention policy: ${retentionDays} days (cutoff: ${cutoffDate.toISOString()})`);
 
-      // Store/update episodes in database
-      const newEpisodes: number[] = [];
+      // Store episodes and queue jobs
+      let newJobs = 0;
       let skippedOldEpisodes = 0;
       
       for (const episode of feed.episodes) {
@@ -147,10 +127,25 @@ export class PodcastProcessor {
           continue;
         }
 
-        const isProcessed = await this.database.isEpisodeProcessed(podcastId, episode.guid);
-        if (!isProcessed) {
-          const episodeId = await this.database.upsertEpisode(podcastId, episode);
-          newEpisodes.push(episodeId);
+        // Store episode
+        this.database.upsertEpisode({
+          guid: episode.guid,
+          showId: podcastId,
+          title: episode.title,
+          description: episode.description,
+          audioUrl: episode.audioUrl,
+          publishDate: episode.publishDate,
+          duration: episode.duration
+        });
+        
+        // Check if already has a job
+        const existingJobs = this.database.getEpisodeJobs(episode.guid);
+        const hasSuccessfulJob = existingJobs.some(job => job.status === 'completed');
+        
+        if (!hasSuccessfulJob) {
+          const jobId = this.database.createJob(episode.guid, 10);
+          console.log(`Added podcast processing job: ${podcastId}/${episode.guid} (ID: ${jobId})`);
+          newJobs++;
         }
       }
 
@@ -158,87 +153,54 @@ export class PodcastProcessor {
         console.log(`Skipped ${skippedOldEpisodes} episodes older than ${retentionDays} days`);
       }
 
-      console.log(`Found ${newEpisodes.length} new episodes to process`);
-
-      // Queue new episodes for processing
-      for (const episodeId of newEpisodes) {
-        await this.jobManager.addPodcastProcessingJob(episodeId, 10);
-      }
-
-      // Update podcast state
-      await this.database.updatePodcastState(podcastId, {
-        lastRSSFetch: now,
-        lastProcessed: now,
-        totalEpisodes: feed.episodes.length,
-        processedEpisodes: feed.episodes.length - newEpisodes.length
-      });
-
-      // Generate and upload RSS feed
-      await this.generateAndUploadRSSFeed(podcastId);
+      console.log(`Found ${newJobs} new episodes to process`);
 
     } catch (error) {
       this.handleProcessingError(error as Error, podcastId);
     }
   }
 
-  private async queueUnprocessedEpisodes(podcastId: string): Promise<void> {
-    const unprocessed = await this.database.getUnprocessedEpisodes(podcastId);
-    
-    for (const episode of unprocessed) {
-      await this.jobManager.addPodcastProcessingJob(episode.id, 5);
-    }
-    
-    if (unprocessed.length > 0) {
-      console.log(`Queued ${unprocessed.length} unprocessed episodes for ${podcastId}`);
-    }
-  }
-
   async cleanupOldFiles(): Promise<void> {
     console.log('Starting cleanup of old files...');
-
-    try {
-      const processingConfig = this.config.getProcessingConfig();
-      
-      // Queue cleanup job
-      await this.jobManager.addCleanupJob(
-        processingConfig.defaultRetentionDays,
-        false // Not a dry run
-      );
-
-      console.log('Cleanup job queued');
-    } catch (error) {
-      console.error('Failed to queue cleanup job:', error);
-    }
+    
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - this.config.getProcessingConfig().defaultRetentionDays);
+    
+    console.log('Cleanup completed');
   }
 
-  async getProcessingStats(): Promise<{
-    queueStats: any;
-    configuredPodcasts: number;
-    enabledPodcasts: number;
-    lastProcessingRun: Date | null;
-  }> {
-    try {
-      const [queueStats, enabledPodcasts, allPodcasts] = await Promise.all([
-        this.jobManager.getQueueStats(),
-        this.config.loadPodcasts(),
-        this.config.getAllPodcasts()
-      ]);
-
-      return {
-        queueStats,
-        configuredPodcasts: allPodcasts.length,
-        enabledPodcasts: enabledPodcasts.length,
-        lastProcessingRun: null // Could get from database
-      };
-    } catch (error) {
-      console.error('Failed to get processing stats:', error);
-      return {
-        queueStats: { waiting: 0, active: 0, completed: 0, failed: 0 },
-        configuredPodcasts: 0,
-        enabledPodcasts: 0,
-        lastProcessingRun: null
-      };
+  getHealthStatus() {
+    const shows = this.database.getAllShows();
+    const jobStats = this.database.getJobStats();
+    
+    // Calculate total episodes and processed counts
+    let totalEpisodes = 0;
+    let processedEpisodes = 0;
+    
+    for (const show of shows) {
+      const episodes = this.database.getShowEpisodes(show.id);
+      totalEpisodes += episodes.length;
+      
+      for (const episode of episodes) {
+        const jobs = this.database.getEpisodeJobs(episode.guid);
+        if (jobs.some(job => job.status === 'completed')) {
+          processedEpisodes++;
+        }
+      }
     }
+    
+    return {
+      status: 'healthy',
+      shows: shows.length,
+      jobs: jobStats,
+      lastProcessingRun: new Date(),
+      stats: {
+        totalPodcasts: shows.length,
+        totalEpisodes: totalEpisodes,
+        processedEpisodes: processedEpisodes,
+        failedEpisodes: jobStats.failed || 0
+      }
+    };
   }
 
   private async initializeServices(): Promise<void> {
@@ -246,10 +208,9 @@ export class PodcastProcessor {
     const llmConfig = this.config.getLLMConfig();
     const storageConfig = this.config.getStorageConfig();
     const databaseConfig = this.config.getDatabaseConfig();
-    const jobsConfig = this.config.getJobsConfig();
 
-    // Initialize database first (standalone)
-    this.database = new DatabaseManager({ dbPath: databaseConfig.path });
+    // Initialize database
+    this.database = new Database(databaseConfig);
 
     // Initialize other services
     this.audioProcessor = new AudioProcessor({
@@ -262,14 +223,15 @@ export class PodcastProcessor {
     this.storageManager = new StorageManager(storageConfig);
     this.rssProcessor = new RSSProcessor();
     
-    // Initialize job manager with all required dependencies
+    // Initialize job manager
     this.jobManager = new JobManager(
-      jobsConfig, 
+      processingConfig.concurrency, 
       this.database,
       this.audioProcessor,
       this.llmOrchestrator,
       this.storageManager,
-      this.rssProcessor
+      this.rssProcessor,
+      { minAdDuration: processingConfig.minAdDuration }
     );
 
     // Test connections
@@ -285,62 +247,30 @@ export class PodcastProcessor {
 
   private setupCronJobs(): void {
     console.log('Setting up scheduled tasks...');
-
-    const processAllTask = cron.schedule('0 * * * *', async () => {
-      console.log('Scheduled podcast processing started');
+    
+    // Process all podcasts every hour
+    const processingJob = cron.schedule('0 * * * *', async () => {
+      console.log('Running scheduled podcast processing...');
       await this.processAllPodcasts();
-    }, { scheduled: false });
-
-    const cleanupTask = cron.schedule('0 2 * * *', async () => {
-      console.log('Scheduled cleanup started');
-      await this.jobManager.addCleanupJob(30);
-    }, { scheduled: false });
-
-    processAllTask.start();
-    cleanupTask.start();
-
-    this.cronJobs.set('processAll', processAllTask);
-    this.cronJobs.set('cleanup', cleanupTask);
-
+    });
+    this.cronJobs.set('process-podcasts', processingJob);
+    
+    // Cleanup old files daily at 3am
+    const cleanupJob = cron.schedule('0 3 * * *', async () => {
+      console.log('Running scheduled cleanup...');
+      await this.cleanupOldFiles();
+    });
+    this.cronJobs.set('cleanup', cleanupJob);
+    
     console.log('✓ Scheduled tasks configured');
   }
 
-  private handleProcessingError(error: Error, podcastId: string): void {
-    console.error(`Processing error for podcast ${podcastId}:`, {
-      error: error.message,
-      stack: error.stack,
-      timestamp: new Date().toISOString(),
-      podcastId
-    });
-
-    // Could implement alerting/monitoring here
-    // await this.notifyError(error, podcastId);
+  private handleProcessingError(error: Error, context: string): void {
+    console.error(`Processing error (${context}):`, error);
   }
 
-  private async generateAndUploadRSSFeed(podcastId: string): Promise<void> {
-    try {
-      const podcast = await this.config.getPodcast(podcastId);
-      if (!podcast) return;
-
-      // Get original feed
-      const originalFeed = await this.rssProcessor.fetchFeed(podcast.rssUrl);
-      
-      // Get processing results from database
-      const processingResults = await this.database.getProcessingResults(podcastId);
-      
-      // Generate processed RSS feed
-      const processedFeedXML = await this.rssProcessor.generateProcessedFeed(originalFeed, processingResults);
-      
-      // Upload to storage
-      const uploadResult = await this.storageManager.uploadRSSFeed(podcastId, processedFeedXML);
-      
-      console.log(`RSS feed uploaded: ${uploadResult.url}`);
-    } catch (error) {
-      console.error(`Failed to generate RSS feed for ${podcastId}:`, error);
-    }
-  }
-
-  getDatabaseManager(): DatabaseManager {
+  // Getters for other services to access
+  getDatabase(): Database {
     return this.database;
   }
 
@@ -348,11 +278,11 @@ export class PodcastProcessor {
     return this.storageManager;
   }
 
-  getJobManager(): JobManager {
-    return this.jobManager;
+  getConfig(): ConfigManager {
+    return this.config;
   }
 
-  getNewDatabaseService(): DatabaseManager {
-    return this.database;
+  getJobManager(): JobManager {
+    return this.jobManager;
   }
 }
