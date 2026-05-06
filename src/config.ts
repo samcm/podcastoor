@@ -72,11 +72,12 @@ export const defaultConfig: AppConfig = {
       pocketCasts: { enabled: false, experimental: true, endpointTemplate: "" },
       openRouter: {
         enabled: true,
-        model: "openai/gpt-4o-mini-transcribe",
+        mode: "audioChat",
+        model: "xiaomi/mimo-v2-omni",
         language: "en",
-        chunkSeconds: 20,
+        chunkSeconds: 60,
         concurrency: 2,
-        estimatedCostPerMinuteUsd: 0.002
+        estimatedCostPerMinuteUsd: 0.0013
       },
       openai: { enabled: false, model: "gpt-4o-mini-transcribe", estimatedCostPerMinuteUsd: 0.003 }
     }

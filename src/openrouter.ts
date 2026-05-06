@@ -128,10 +128,10 @@ export async function classifyTranscriptWithOpenRouter(
         confidence: Math.max(0, Math.min(1, entry.confidence ?? 0.75)),
         reason: entry.reason ?? "OpenRouter transcript segment classification",
         source: "model" as const,
-        alignment: {
+          alignment: {
           startSegmentIndex: orderedStart,
           endSegmentIndex: orderedEnd,
-          method: transcript.source.startsWith("openrouter-stt") || transcript.source.startsWith("openai:")
+          method: transcript.source.startsWith("openrouter-stt") || transcript.source.startsWith("openrouter-audio-chat") || transcript.source.startsWith("openai:")
             ? ("stt-chunk" as const)
             : ("feed-transcript-segment" as const)
         },

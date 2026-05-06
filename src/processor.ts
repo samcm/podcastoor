@@ -30,7 +30,7 @@ export interface ProcessRunSummary {
 }
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
-const PIPELINE_VERSION = "v10-empty-result-audit-pass";
+const PIPELINE_VERSION = "v11-openrouter-audio-chat-transcripts";
 
 export async function processFeeds(options: ProcessingOptions): Promise<ProcessRunSummary> {
   const config = await loadConfig(options.configPath);
@@ -436,8 +436,10 @@ function processingSignature(config: AppConfig, podcast: EffectivePodcastConfig,
 
 function isTranscriptReusable(podcast: EffectivePodcastConfig, transcript: Transcript | null | undefined): transcript is Transcript {
   if (!transcript || (!transcript.text && transcript.segments.length === 0)) return false;
-  if (transcript.source.startsWith("openrouter-stt:")) {
-    return podcast.transcripts.providers.openRouter.enabled && transcript.source === `openrouter-stt:${podcast.transcripts.providers.openRouter.model}`;
+  if (transcript.source.startsWith("openrouter-stt:") || transcript.source.startsWith("openrouter-audio-chat:")) {
+    const mode = podcast.transcripts.providers.openRouter.mode ?? "stt";
+    const expectedSource = `${mode === "audioChat" ? "openrouter-audio-chat" : "openrouter-stt"}:${podcast.transcripts.providers.openRouter.model}`;
+    return podcast.transcripts.providers.openRouter.enabled && transcript.source === expectedSource;
   }
   if (transcript.source.startsWith("openai:")) {
     return podcast.transcripts.providers.openai.enabled && transcript.source === `openai:${podcast.transcripts.providers.openai.model}`;

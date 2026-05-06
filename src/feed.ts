@@ -175,9 +175,10 @@ function rewriteEpisodeItem(
   options: { publicBaseUrl: string; podcastSlug: string },
   manifest: EpisodeManifest
 ): Record<string, unknown> {
-  const audioUrl = absoluteUrl(options.publicBaseUrl, `/audio/${options.podcastSlug}/${episodeKeyValue}/episode.mp3`);
-  const chaptersUrl = absoluteUrl(options.publicBaseUrl, `/assets/${options.podcastSlug}/${episodeKeyValue}/chapters.json`);
-  const transcriptUrl = absoluteUrl(options.publicBaseUrl, `/assets/${options.podcastSlug}/${episodeKeyValue}/transcript.vtt`);
+  const version = assetVersion(manifest);
+  const audioUrl = absoluteUrl(options.publicBaseUrl, `/audio/${options.podcastSlug}/${episodeKeyValue}/episode.mp3?v=${version}`);
+  const chaptersUrl = absoluteUrl(options.publicBaseUrl, `/assets/${options.podcastSlug}/${episodeKeyValue}/chapters.json?v=${version}`);
+  const transcriptUrl = absoluteUrl(options.publicBaseUrl, `/assets/${options.podcastSlug}/${episodeKeyValue}/transcript.vtt?v=${version}`);
   const title = textOf(item["itunes:title"]) || textOf(item.title) || manifest.title;
   const adFreeTitle = withAdFreeSuffix(title);
   item.title = adFreeTitle;
@@ -230,6 +231,10 @@ function rewriteEpisodeItem(
   }
 
   return item;
+}
+
+function assetVersion(manifest: EpisodeManifest): string {
+  return encodeURIComponent(`${manifest.pipelineVersion}-${manifest.generatedAt}`);
 }
 
 function withAdFreeSuffix(title: string): string {

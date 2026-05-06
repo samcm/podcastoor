@@ -15,7 +15,7 @@
 
 The service does not use keyword-derived cuts or keyword-derived metadata signals. Episode descriptions and publisher chapters are context for the model, not independent decision rules.
 
-The default config calls OpenRouter for STT and text-only segment classification, but does not use a secondary model if those calls fail.
+The default config calls OpenRouter for audio-chat transcription and text-only segment classification, but does not use a secondary model if those calls fail.
 
 Pocket Casts generated transcripts are not used by default. There is no public Pocket Casts API, so any discovered endpoint should be treated as experimental and replaceable.
 
@@ -23,7 +23,7 @@ Pocket Casts generated transcripts are not used by default. There is no public P
 
 - Dynamic ad removal depends on ASR/model detection after the inserted audio appears in the downloaded file. There is not yet an audio-fingerprint diff across multiple regional downloads.
 - No diarization-aware classification yet.
-- Current OpenRouter STT alignment is chunk-based, not word-based. The next precision upgrade should add provider word timestamps or forced alignment, preferably Qwen3-ASR/Qwen3-ForcedAligner, Mistral Voxtral Mini Transcribe V2, Deepgram Nova-3, ElevenLabs Scribe v2, or Groq direct STT.
+- Current OpenRouter audio-chat alignment uses model-estimated utterance timestamps, not provider word timestamps. The next precision upgrade should add provider word timestamps or forced alignment, preferably Qwen3-ASR/Qwen3-ForcedAligner, Mistral Voxtral Mini Transcribe V2, Deepgram Nova-3, ElevenLabs Scribe v2, or Groq direct STT.
 - Web UI is read-only: it shows source/processed audio, clickable cut annotations, and removed transcript rows, but does not yet save manual edits.
 - No purge/retention policy, by design for this spike.
 - No queue persistence beyond manifests.

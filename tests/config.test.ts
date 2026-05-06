@@ -11,7 +11,8 @@ describe("config", () => {
     expect(config.categories.preferred).toEqual([]);
     expect(config.categories.muted).toEqual([]);
     expect(config.llm.model).toBe("deepseek/deepseek-v4-pro");
-    expect(config.transcripts.providers.openRouter.model).toBe("openai/gpt-4o-mini-transcribe");
+    expect(config.transcripts.providers.openRouter.mode).toBe("audioChat");
+    expect(config.transcripts.providers.openRouter.model).toBe("xiaomi/mimo-v2-omni");
     expect(config.automation.processOnStartup).toBe(true);
   });
 

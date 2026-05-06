@@ -2,7 +2,7 @@
 
 A conservative podcast RSS proxy for Pocket Casts. It processes recent episodes, removes model-detected ad/noise windows, rewrites feed metadata, and serves processed audio, transcripts, and chapters from disk.
 
-The default mode is autonomous: on server startup it fetches the configured feeds, processes the last 7 days, downloads audio, transcribes timestamped chunks with OpenRouter STT, classifies segments with OpenRouter/DeepSeek, renders processed audio, and serves rewritten feeds/assets.
+The default mode is autonomous: on server startup it fetches the configured feeds, processes the last 7 days, downloads audio, transcribes timestamped chunks with an OpenRouter audio-capable model, classifies segments with OpenRouter/DeepSeek, renders processed audio, and serves rewritten feeds/assets.
 
 ## Current Shape
 
@@ -18,7 +18,7 @@ The default mode is autonomous: on server startup it fetches the configured feed
 - Disk-backed manifests under `data/podcasts/:podcastSlug/episodes/:episodeKey/manifest.json`.
 - Podlove Simple Chapters parsing and Podcasting 2.0 chapter JSON output.
 - Feed transcript acquisition where feeds expose `podcast:transcript`.
-- Cost-gated provider hooks for OpenRouter STT, OpenAI transcription, feed transcripts, and OpenRouter/DeepSeek text classification.
+- Cost-gated provider hooks for OpenRouter audio transcription, OpenAI transcription, feed transcripts, and OpenRouter/DeepSeek text classification.
 - Model-only timed ad decisions. There are no keyword-derived cuts or keyword-derived audit signals.
 - ffmpeg render path for cutting removal segments, preserving source MP3 audio with stream-copy where possible, and inserting a short marker tone.
 - Web deep-dive shows RSS duration, real source duration, processed duration, source/processed players, an annotated cut timeline, and collapsed timestamped transcript rows.
@@ -97,8 +97,9 @@ transcripts:
   providers:
     openRouter:
       enabled: true
-      model: openai/gpt-4o-mini-transcribe
-      chunkSeconds: 20
+      mode: audioChat
+      model: xiaomi/mimo-v2-omni
+      chunkSeconds: 60
 
 llm:
   provider: openrouter
@@ -111,16 +112,16 @@ There is no fallback model configured. If the model call fails, the service reco
 DeepSeek V4 Pro is text-only, so the pipeline is:
 
 1. Audio download.
-2. OpenRouter STT transcription into fixed timestamped chunks.
+2. OpenRouter audio-chat transcription into timestamped utterance segments.
 3. DeepSeek text classification over numbered transcript chunks.
-4. Segment index alignment back to chunk timestamps.
+4. Segment index alignment back to transcript timestamps.
 5. ffmpeg cuts and marker-tone insertion.
 
 ## Transcription Providers
 
 The provider order is:
 
-1. Configured preferred provider, currently OpenRouter STT
+1. Configured preferred provider, currently OpenRouter audio transcription
 2. Feed-provided `podcast:transcript`
 3. Experimental Pocket Casts endpoint template, disabled because there is no public Pocket Casts API
 4. OpenAI transcription, disabled by default
@@ -131,11 +132,11 @@ OpenRouter and OpenAI providers need a downloaded source file, so they only run 
 
 The current best path with the available key is:
 
-- OpenRouter `openai/gpt-4o-mini-transcribe`: best transcript accuracy in the current bounded bake-off against Australian podcast clips, with observed OpenRouter cost around `$0.002/min`.
+- OpenRouter `xiaomi/mimo-v2-omni` audio chat: best current OpenRouter-only default in the bounded bake-off, tying the best phrase accuracy at lower observed cost while returning usable timestamped JSON segments.
 - DeepSeek V4 Pro on OpenRouter: text-only classifier over segment IDs, with exact request cost recorded from OpenRouter usage when available.
 - ffmpeg: cuts timestamped chunk windows, stream-copies source MP3 audio where possible, and inserts the marker tone.
 
-OpenRouter's STT endpoint currently returns text plus usage rather than native word timestamps, so this app chunks the source audio before transcription. The default is `openai/gpt-4o-mini-transcribe` with 20-second chunks; the text model can return estimated offsets inside the first and last chunk so cuts do not have to snap to whole chunks. OpenRouter chat responses include `usage.cost`; the app records that exact model-call cost when present and only falls back to token-price estimates for preflight budgeting.
+OpenRouter's dedicated STT endpoint currently returns text plus usage rather than native word timestamps, so the app uses OpenRouter audio-chat transcription by default and asks the audio model for strict timestamped JSON segments. Those timestamps are still model-generated, not forced-alignment timestamps. OpenRouter chat responses include `usage.cost`; the app records that exact model-call cost when present and only falls back to token-price estimates for preflight budgeting.
 
 ## Data Layout
 

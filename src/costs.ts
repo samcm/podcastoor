@@ -20,12 +20,12 @@ export function estimateEpisodeCost(podcast: EffectivePodcastConfig, transcript:
 
   if (transcript?.usage?.provider === "openrouter" && transcript.usage.costUsd != null) {
     estimatedUsd += transcript.usage.costUsd;
-    notes.push(`OpenRouter STT actual: ${((transcript.usage.seconds ?? 0) / 60).toFixed(1)} min on ${transcript.usage.model} = $${transcript.usage.costUsd.toFixed(6)}`);
+    notes.push(`OpenRouter transcript actual: ${((transcript.usage.seconds ?? 0) / 60).toFixed(1)} min on ${transcript.usage.model} = $${transcript.usage.costUsd.toFixed(6)}`);
   } else if (!transcript && podcast.transcripts.providers.openRouter.enabled && durationSeconds != null) {
     const minutes = durationSeconds / 60;
     const cost = minutes * podcast.transcripts.providers.openRouter.estimatedCostPerMinuteUsd;
     estimatedUsd += cost;
-    notes.push(`OpenRouter STT estimate: ${minutes.toFixed(1)} min x $${podcast.transcripts.providers.openRouter.estimatedCostPerMinuteUsd}/min on ${podcast.transcripts.providers.openRouter.model}`);
+    notes.push(`OpenRouter transcript estimate: ${minutes.toFixed(1)} min x $${podcast.transcripts.providers.openRouter.estimatedCostPerMinuteUsd}/min on ${podcast.transcripts.providers.openRouter.model}`);
   }
 
   if (!transcript && podcast.transcripts.providers.openai.enabled && durationSeconds != null) {

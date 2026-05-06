@@ -57,6 +57,7 @@ export interface TranscriptProviderConfig {
     };
     openRouter: {
       enabled: boolean;
+      mode?: "stt" | "audioChat";
       model: string;
       language: string;
       chunkSeconds: number;

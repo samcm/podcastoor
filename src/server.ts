@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import path from "node:path";
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { AppConfig, EpisodeManifest } from "./types.js";
 import { loadConfig, resolvePodcastConfig } from "./config.js";
 import { fetchFeed, parseFeed, rewriteFeed } from "./feed.js";
@@ -89,8 +90,7 @@ export function buildServer(config: AppConfig) {
       reply.code(404);
       return { error: "processed audio not found", hint: "run `npm run process -- --download-audio --no-dry-run` for this episode" };
     }
-    reply.type("audio/mpeg");
-    return reply.send(createReadStream(paths.processedAudio));
+    return sendAudioFile(request, reply, paths.processedAudio);
   });
 
   app.get("/audio/:podcastSlug/:episodeKey/source.mp3", async (request, reply) => {
@@ -100,8 +100,7 @@ export function buildServer(config: AppConfig) {
       reply.code(404);
       return { error: "source audio not found" };
     }
-    reply.type("audio/mpeg");
-    return reply.send(createReadStream(paths.sourceAudio));
+    return sendAudioFile(request, reply, paths.sourceAudio);
   });
 
   app.get("/assets/:podcastSlug/:episodeKey/chapters.json", async (request, reply) => {
@@ -135,6 +134,50 @@ export function buildServer(config: AppConfig) {
   });
 
   return app;
+}
+
+async function sendAudioFile(request: FastifyRequest, reply: FastifyReply, filePath: string) {
+  const info = await stat(filePath);
+  const range = request.headers.range;
+  reply.type("audio/mpeg");
+  reply.header("Accept-Ranges", "bytes");
+  reply.header("Cache-Control", "no-store");
+
+  if (!range) {
+    reply.header("Content-Length", String(info.size));
+    return reply.send(createReadStream(filePath));
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!match) {
+    reply.code(416);
+    reply.header("Content-Range", `bytes */${info.size}`);
+    return reply.send();
+  }
+
+  const [, startRaw, endRaw] = match;
+  let start: number;
+  let end: number;
+  if (!startRaw && endRaw) {
+    const suffixLength = Number(endRaw);
+    start = Math.max(0, info.size - suffixLength);
+    end = info.size - 1;
+  } else {
+    start = Number(startRaw);
+    end = endRaw ? Number(endRaw) : info.size - 1;
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || start >= info.size) {
+    reply.code(416);
+    reply.header("Content-Range", `bytes */${info.size}`);
+    return reply.send();
+  }
+
+  end = Math.min(end, info.size - 1);
+  reply.code(206);
+  reply.header("Content-Range", `bytes ${start}-${end}/${info.size}`);
+  reply.header("Content-Length", String(end - start + 1));
+  return reply.send(createReadStream(filePath, { start, end }));
 }
 
 async function getRewrittenFeed(config: AppConfig, podcastSlug: string): Promise<string> {
@@ -247,9 +290,9 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
         .map((episode) => {
           const sourceDuration = episode.ui.sourceDurationSeconds;
           const processedDuration = episode.ui.processedDurationSeconds;
-          const sttCost = episode.transcript?.costUsd ?? 0;
+          const transcriptCost = episode.transcript?.costUsd ?? 0;
           const textLlmCost = (episode.llm ?? []).reduce((sum, usage) => sum + (usage.costUsd ?? 0), 0);
-          const sttSegments = episode.transcript?.segmentCount ?? episode.ui.transcriptSegments.length;
+          const transcriptSegments = episode.transcript?.segmentCount ?? episode.ui.transcriptSegments.length;
           return `<article class="episode">
             <div class="episode-head">
               <h2>${escapeHtml(episode.title)}</h2>
@@ -266,7 +309,7 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
               <dt>Untimed Signals</dt><dd>${episode.untimedSignals.length}</dd>
               <dt>Chapters</dt><dd>${episode.chapters.length}</dd>
               <dt>Total Cost</dt><dd>$${episode.costs.actualUsd.toFixed(6)}</dd>
-              <dt>STT Cost</dt><dd>$${sttCost.toFixed(6)}${sttSegments ? ` · ${sttSegments} chunks` : ""}</dd>
+              <dt>Transcript Cost</dt><dd>$${transcriptCost.toFixed(6)}${transcriptSegments ? ` · ${transcriptSegments} segments` : ""}</dd>
               <dt>Text LLM Cost</dt><dd>$${textLlmCost.toFixed(6)} · ${(episode.llm ?? []).length} calls</dd>
             </dl>
             ${renderAudioCompare(episode)}
@@ -541,8 +584,21 @@ function page(title: string, body: string): string {
       episode.querySelectorAll("audio").forEach((candidate) => {
         if (candidate !== audio) candidate.pause();
       });
-      audio.currentTime = Math.max(0, seconds);
-      audio.play().catch(() => {});
+      const targetSeconds = Math.max(0, seconds);
+      const seek = () => {
+        try {
+          audio.currentTime = targetSeconds;
+        } catch {
+          return;
+        }
+        audio.play().catch(() => {});
+      };
+      if (audio.readyState < 1) {
+        audio.addEventListener("loadedmetadata", seek, { once: true });
+        audio.load();
+        return;
+      }
+      seek();
     }
 
     document.addEventListener("click", (event) => {

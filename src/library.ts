@@ -84,13 +84,17 @@ async function enrichEpisodeForUi(config: AppConfig, slug: string, manifest: Epi
   return {
     ...manifest,
     ui: {
-      sourceAudioUrl: sourceExists ? `/audio/${slug}/${manifest.episodeKey}/source.mp3` : undefined,
-      processedAudioUrl: processedExists ? `/audio/${slug}/${manifest.episodeKey}/episode.mp3` : undefined,
+      sourceAudioUrl: sourceExists ? `/audio/${slug}/${manifest.episodeKey}/source.mp3?v=${assetVersion(manifest)}` : undefined,
+      processedAudioUrl: processedExists ? `/audio/${slug}/${manifest.episodeKey}/episode.mp3?v=${assetVersion(manifest)}` : undefined,
       transcriptSegments: transcript?.segments ?? [],
       sourceDurationSeconds: manifest.audio.sourceDurationSeconds ?? (sourceExists ? await probeDuration(paths.sourceAudio) : undefined),
       processedDurationSeconds: manifest.processedDurationSeconds ?? manifest.audio.durationSeconds ?? (processedExists ? await probeDuration(paths.processedAudio) : undefined)
     }
   };
+}
+
+function assetVersion(manifest: EpisodeManifest): string {
+  return encodeURIComponent(`${manifest.pipelineVersion}-${manifest.generatedAt}`);
 }
 
 async function listManifests(config: AppConfig, slug: string): Promise<EpisodeManifest[]> {

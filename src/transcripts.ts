@@ -158,8 +158,9 @@ async function acquireOpenRouterTranscript(podcast: EffectivePodcastConfig, sour
   }
 
   const duration = await probeDuration(sourceAudioPath);
+  const mode = provider.mode ?? "stt";
   const chunkSeconds = Math.max(5, provider.chunkSeconds);
-  const outputDir = await mkdtemp(path.join(tmpdir(), "podcast-proxy-openrouter-stt-"));
+  const outputDir = await mkdtemp(path.join(tmpdir(), "podcast-proxy-openrouter-transcript-"));
   const chunks = Array.from({ length: Math.ceil(duration / chunkSeconds) }, (_, index) => {
     const start = index * chunkSeconds;
     return {
@@ -200,25 +201,39 @@ async function acquireOpenRouterTranscript(podcast: EffectivePodcastConfig, sour
     let totalSeconds = 0;
     const results = await mapWithConcurrency(chunks, Math.max(1, provider.concurrency), async (chunk) => {
       const audio = (await readFile(chunk.path)).toString("base64");
-      const payload = await transcribeOpenRouterChunk({
-        apiKey,
-        model: provider.model,
-        language: provider.language,
-        audioBase64: audio
-      });
+      const payload =
+        mode === "audioChat"
+          ? await transcribeOpenRouterAudioChatChunk({
+              apiKey,
+              model: provider.model,
+              audioBase64: audio,
+              durationSeconds: chunk.end - chunk.start
+            })
+          : await transcribeOpenRouterChunk({
+              apiKey,
+              model: provider.model,
+              language: provider.language,
+              audioBase64: audio
+            });
       totalCost += Number(payload.usage?.cost ?? 0);
       totalSeconds += Number(payload.usage?.seconds ?? chunk.end - chunk.start);
-      return {
-        start: chunk.start,
-        end: chunk.end,
-        text: stripHtml(payload.text ?? "").trim()
-      };
+      const localSegments =
+        payload.segments?.length
+          ? payload.segments
+          : [{ start: 0, end: chunk.end - chunk.start, text: stripHtml(payload.text ?? "").trim() }];
+      return localSegments
+        .map((segment) => ({
+          start: Number((chunk.start + Math.max(0, segment.start)).toFixed(3)),
+          end: Number((chunk.start + Math.min(chunk.end - chunk.start, segment.end)).toFixed(3)),
+          text: stripHtml(segment.text).trim()
+        }))
+        .filter((segment) => segment.text && segment.end > segment.start);
     });
 
-    const segments = results.filter((segment) => segment.text);
+    const segments = results.flat().sort((a, b) => a.start - b.start);
     return {
-      source: `openrouter-stt:${provider.model}`,
-      format: "application/vnd.openrouter.stt+json",
+      source: `${mode === "audioChat" ? "openrouter-audio-chat" : "openrouter-stt"}:${provider.model}`,
+      format: mode === "audioChat" ? "application/vnd.openrouter.audio-chat+json" : "application/vnd.openrouter.stt+json",
       language: provider.language,
       text: segments.map((segment) => segment.text).join(" "),
       segments,
@@ -239,7 +254,7 @@ async function transcribeOpenRouterChunk(params: {
   model: string;
   language: string;
   audioBase64: string;
-}): Promise<{ text?: string; usage?: { cost?: number; seconds?: number } }> {
+}): Promise<{ text?: string; segments?: TranscriptSegment[]; usage?: { cost?: number; seconds?: number } }> {
   let lastError = "";
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const controller = new AbortController();
@@ -285,6 +300,154 @@ async function transcribeOpenRouterChunk(params: {
     await delay(backoffMs + Math.floor(Math.random() * 500));
   }
   throw new Error(`OpenRouter STT failed after retries: ${lastError}`);
+}
+
+async function transcribeOpenRouterAudioChatChunk(params: {
+  apiKey: string;
+  model: string;
+  audioBase64: string;
+  durationSeconds: number;
+}): Promise<{ text?: string; segments?: TranscriptSegment[]; usage?: { cost?: number; seconds?: number } }> {
+  let lastError = "";
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120_000);
+    let response: Response;
+    let body = "";
+    try {
+      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${params.apiKey}`,
+          "content-type": "application/json",
+          "http-referer": "http://localhost:3729",
+          "x-title": "podcast-proxy-v1"
+        },
+        body: JSON.stringify({
+          model: params.model,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: [
+                    "Transcribe this podcast audio clip into timestamped segments.",
+                    "Return strict JSON only: {\"segments\":[{\"start\":number,\"end\":number,\"text\":\"...\"}]}",
+                    "Timestamps must be seconds from the start of this exact clip.",
+                    `Use natural utterance-sized segments, usually 2-8 seconds. The last segment end must not exceed ${params.durationSeconds.toFixed(3)}.`,
+                    "Preserve proper nouns, brand names, show names, URLs, and Australian place names."
+                  ].join(" ")
+                },
+                {
+                  type: "input_audio",
+                  input_audio: {
+                    data: params.audioBase64,
+                    format: "mp3"
+                  }
+                }
+              ]
+            }
+          ],
+          temperature: 0,
+          max_tokens: 5000,
+          response_format: { type: "json_object" }
+        }),
+        signal: controller.signal
+      });
+      body = await response.text();
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt === 5) break;
+      await delay(Math.min(30_000, 1500 * 2 ** attempt) + Math.floor(Math.random() * 500));
+      continue;
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (response.ok) {
+      try {
+        const payload = JSON.parse(body) as {
+          id?: string;
+          model?: string;
+          choices?: Array<{ message?: { content?: string } }>;
+          usage?: { cost?: number; seconds?: number };
+        };
+        const segments = parseOpenRouterAudioChatSegments(payload.choices?.[0]?.message?.content ?? "", params.durationSeconds);
+        if (segments.length === 0) {
+          lastError = `audio chat transcript returned no segments: ${body.slice(0, 500)}`;
+          if (attempt === 5) break;
+          await delay(Math.min(30_000, 1500 * 2 ** attempt) + Math.floor(Math.random() * 500));
+          continue;
+        }
+        const cost = numberOrUndefined(payload.usage?.cost) ?? (payload.id ? await fetchOpenRouterGenerationCost(params.apiKey, payload.id) : undefined);
+        return {
+          text: segments.map((segment) => segment.text).join(" "),
+          segments,
+          usage: {
+            cost,
+            seconds: params.durationSeconds
+          }
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        if (attempt === 5) break;
+        await delay(Math.min(30_000, 1500 * 2 ** attempt) + Math.floor(Math.random() * 500));
+        continue;
+      }
+    }
+    lastError = `${response.status} ${body}`;
+    if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt === 5) break;
+    const retryAfter = Number(response.headers.get("retry-after"));
+    const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : Math.min(30_000, 1500 * 2 ** attempt);
+    await delay(backoffMs + Math.floor(Math.random() * 500));
+  }
+  throw new Error(`OpenRouter audio chat transcription failed after retries: ${lastError}`);
+}
+
+function parseOpenRouterAudioChatSegments(content: string, durationSeconds: number): TranscriptSegment[] {
+  const raw = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  const parsed = JSON.parse(raw) as unknown;
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).segments)
+      ? ((parsed as Record<string, unknown>).segments as unknown[])
+      : [];
+  return entries
+    .map((entry) => entry as Record<string, unknown>)
+    .map((entry) => {
+      const start = Math.max(0, Math.min(durationSeconds, Number(entry.start ?? entry.startTime ?? 0)));
+      const end = Math.max(start, Math.min(durationSeconds, Number(entry.end ?? entry.endTime ?? start)));
+      return {
+        start: Number(start.toFixed(3)),
+        end: Number(end.toFixed(3)),
+        text: stripHtml(textOf(entry.text ?? entry.body ?? entry.content)).trim()
+      };
+    })
+    .filter((segment) => segment.text && segment.end > segment.start)
+    .sort((a, b) => a.start - b.start);
+}
+
+async function fetchOpenRouterGenerationCost(apiKey: string, generationId: string): Promise<number | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const response = await fetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(generationId)}`, {
+      headers: { authorization: `Bearer ${apiKey}` },
+      signal: controller.signal
+    });
+    if (!response.ok) return undefined;
+    const payload = (await response.json()) as { data?: { total_cost?: number; usage?: number } };
+    return numberOrUndefined(payload.data?.total_cost ?? payload.data?.usage);
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
 }
 
 function extractPodcastIndexSegments(value: unknown): TranscriptSegment[] {
