@@ -42,6 +42,10 @@ program
   .action(async () => {
     const configPath = program.opts().config;
     const config = await loadConfig(configPath);
+    if (!config.automation.enabled) {
+      console.log(JSON.stringify({ at: new Date().toISOString(), message: "automation disabled; worker exiting" }));
+      return;
+    }
     const intervalMs = Math.max(1, config.automation.intervalMinutes) * 60 * 1000;
     let firstRun = true;
     while (true) {

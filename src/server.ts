@@ -249,7 +249,7 @@ function renderPodcastList(
     "Podcast Proxy",
     `<header>
       <h1>Podcast Proxy</h1>
-      <p>${automation.running ? "Processing is running" : "Processing is idle"}${automation.lastFinishedAt ? ` · last finished ${escapeHtml(automation.lastFinishedAt)}` : ""}</p>
+      <p>${automation.running ? "Processing is running" : "Processing is idle"}${automation.lastFinishedAt ? ` · last finished ${renderLocalTime(automation.lastFinishedAt)}` : ""}</p>
       <p>Autonomous mode is enabled when configured: process on startup, then repeat on the configured interval.</p>
     </header>
     ${renderActivityLog(activity)}
@@ -279,7 +279,7 @@ function renderActivityLog(activity: ActivityEvent[]): string {
     ? activity
         .map(
           (event) => `<li class="${escapeHtml(event.level)}">
-            <time>${escapeHtml(formatActivityTime(event.at))}</time>
+            ${renderLocalTime(event.at, "activity")}
             <strong>${escapeHtml(event.message)}</strong>
             ${event.podcastSlug ? `<span>${escapeHtml(event.podcastSlug)}</span>` : ""}
             ${event.episodeTitle ? `<em>${escapeHtml(event.episodeTitle)}</em>` : ""}
@@ -323,7 +323,7 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
               <span>${escapeHtml(episode.audio.status)}</span>
             </div>
             <dl>
-              <dt>Published</dt><dd>${escapeHtml(episode.pubDate ?? "unknown")}</dd>
+              <dt>Published</dt><dd>${renderLocalTime(episode.pubDate)}</dd>
               <dt>RSS Duration</dt><dd>${formatSeconds(episode.originalDurationSeconds)}</dd>
               <dt>Source Audio</dt><dd>${formatSeconds(sourceDuration)}</dd>
               <dt>Processed Audio</dt><dd>${formatSeconds(processedDuration)}</dd>
@@ -562,7 +562,7 @@ function page(title: string, body: string): string {
     ul, ol { margin:0; padding-left:20px; }
     .activity { margin:0 auto 14px; }
     .activity ol { display:grid; gap:8px; padding-left:0; list-style:none; margin-top:12px; }
-    .activity li { display:grid; grid-template-columns:88px minmax(130px,1fr) minmax(80px,120px) minmax(120px,1.4fr); gap:8px; align-items:start; border-top:1px solid var(--line); padding-top:8px; }
+    .activity li { display:grid; grid-template-columns:170px minmax(130px,1fr) minmax(80px,120px) minmax(120px,1.4fr); gap:8px; align-items:start; border-top:1px solid var(--line); padding-top:8px; }
     .activity li:first-child { border-top:0; padding-top:0; }
     .activity li.warn strong { color:#9a3412; }
     .activity li.error strong { color:#991b1b; }
@@ -612,6 +612,22 @@ function page(title: string, body: string): string {
     }
   </style>
   <script>
+    function formatLocalTimes() {
+      const formatters = {
+        activity: new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+        full: new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" })
+      };
+      document.querySelectorAll("time[data-local-time]").forEach((node) => {
+        const raw = node.getAttribute("datetime");
+        if (!raw) return;
+        const date = new Date(raw);
+        if (Number.isNaN(date.getTime())) return;
+        const mode = node.getAttribute("data-local-time") === "activity" ? "activity" : "full";
+        node.textContent = formatters[mode].format(date);
+        node.title = date.toISOString();
+      });
+    }
+
     function jumpAudio(episode, target, seconds) {
       const audio = episode.querySelector(target === "source" ? "audio[data-role='source-audio']" : "audio[data-role='processed-audio']");
       if (!audio || !Number.isFinite(seconds)) return;
@@ -665,6 +681,12 @@ function page(title: string, body: string): string {
       if (!episode || !Number.isFinite(duration)) return;
       jumpAudio(episode, timeline.getAttribute("data-timeline-target"), duration / 2);
     });
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", formatLocalTimes, { once: true });
+    } else {
+      formatLocalTimes();
+    }
   </script>
 </head>
 <body>${body}</body>
@@ -683,6 +705,13 @@ function formatSeconds(value: number | undefined): string {
   const seconds = total % 60;
   if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function renderLocalTime(value: string | undefined | null, mode: "activity" | "full" = "full"): string {
+  if (!value) return "unknown";
+  const date = new Date(value);
+  const datetime = Number.isNaN(date.getTime()) ? value : date.toISOString();
+  return `<time datetime="${escapeHtml(datetime)}" data-local-time="${mode}">${escapeHtml(value)}</time>`;
 }
 
 function timeSaved(sourceDuration: number | undefined, processedDuration: number | undefined): number | undefined {
@@ -774,12 +803,6 @@ function renderQualityLabel(audio: EpisodeManifest["audio"]): string {
   if (audio.renderMode === "source-copy") return `source-copy${audio.bitrateKbps ? ` · ${audio.bitrateKbps} kbps` : ""}`;
   if (audio.renderMode === "encode") return `encoded${audio.bitrateKbps ? ` · ${audio.bitrateKbps} kbps` : ""}`;
   return audio.renderMode ?? "unknown";
-}
-
-function formatActivityTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function formatActivityDetails(details: Record<string, unknown>): string {
