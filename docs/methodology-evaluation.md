@@ -13,6 +13,7 @@ Checked and exercised on 2026-05-06.
 | OpenRouter `xiaomi/mimo-v2-omni` audio chat | Observed about `$0.00066/min` in the clip bake-off | Model-generated utterance timestamps | Current OpenRouter-only default; tied the best transcript phrase score at lower cost and returned usable timestamped JSON. |
 | Other OpenRouter audio chat models | Varies by model; often slower or more expensive | Model-generated timestamps only | Useful for audio reasoning experiments, but not a substitute for forced alignment. |
 | Direct Gemini audio prompting | Token priced | Model-generated timestamps only | Works for audio input and timestamped JSON prompts, but the tested transcript still missed key Australian/podcast terms. |
+| Direct full-episode audio ad detection | `$0.006-$0.052` observed for a 33.4 min episode depending model | Model-generated timestamps only | Rejected as the primary cutter for now. It is cheap and promising as an audit signal, but full-episode timestamp placement missed known ad blocks. |
 | Groq `whisper-large-v3-turbo` direct | `$0.000667/min` published | Segment/word timestamps | Best cheap alignment upgrade once `GROQ_API_KEY` exists. |
 | Mistral Voxtral Mini Transcribe V2 | Around `$0.003/min` published | Word timestamps + diarization | Strong hosted non-Whisper contender, needs `MISTRAL_API_KEY`. |
 | Qwen3-ASR-Flash / Qwen3 ForcedAligner | About `$0.0021/min` international for hosted file transcription; local aligner has machine cost | Word timestamps / forced alignment | Strongest researched alignment direction; needs DashScope integration or local model deployment. |
@@ -35,6 +36,20 @@ The test clips were extracted from a configured Australian podcast episode and c
 | Direct Gemini `gemini-3.1-flash-lite-preview` | 11/16 | Gemini usage only | Audio works, including timestamped JSON prompts, but it still rendered `Four Pines` as `four Punts`/similar in the intro test. |
 
 OpenRouter's dedicated STT endpoint returned `text` plus `usage` for every tested STT model, but no native `words` or `segments` arrays. That means OpenRouter STT still needs pre-splitting to create coarse source-time windows. The current default moves to OpenRouter audio chat because `xiaomi/mimo-v2-omni` produced strict JSON segments with start/end seconds when prompted, although those seconds remain model-estimated.
+
+## Direct Audio Ad Detection Smoke Test
+
+The same configured full episode and four bounded ad-region clips were also tested by sending audio directly to OpenRouter audio-capable chat models and asking for removable `startTime`/`endTime` windows.
+
+| Model path | Clip result | Full-episode result | Observed cost | Verdict |
+| --- | --- | --- | ---: | --- |
+| `xiaomi/mimo-v2.5` | Best direct-audio clip result: strong pre-roll and mid-show, weaker inserted/post-roll boundaries | Cheap full-episode run found pre-roll and inserted mid-roll but missed the known mid-show block and under-covered post-roll | `$0.0034` clips, `$0.0062` full episode | Keep as future audit/refinement candidate, not primary cutter. |
+| `google/gemini-3-flash-preview` | Good pre-roll, under-cut mid-show, inserted, and post-roll | Missed the known mid-show block and post-roll; under-covered pre-roll | `$0.0171` clips, `$0.0516` full episode | Rejected as primary cutter. |
+| `google/gemini-3.1-flash-lite-preview` | Good pre-roll and content recognition, but under-cut mid/post boundaries | Found only pre-roll and one later partial block in the full episode | `$0.0086` clips, `$0.0260` full episode | Rejected as primary cutter. |
+| `xiaomi/mimo-v2-omni` | Strong pre-roll, but shifted/under-cut inserted and post-roll blocks | Not promoted over v2.5 for direct ad detection | `$0.0037` clips | Kept as transcript provider, not direct cutter. |
+| `mistralai/voxtral-small-24b-2507` | Poor timestamp placement on these clips | Not tested full episode after clip failure | `$0.0594` clips | Rejected. |
+
+The direct-audio path is attractive because it can be cheaper than STT plus text classification, but the timestamp quality was not stable enough for destructive edits. The current safer path remains transcript acquisition plus text classification, with direct audio reserved for a possible second-pass audit around candidate regions.
 
 ## Current Pipeline
 

@@ -67,7 +67,8 @@ describe("feed", () => {
     const rewritten = rewriteFeed(parsed, {
       publicBaseUrl: "http://localhost:3729",
       podcastSlug: "sample",
-      manifests: new Map([[parsed.episodes[0].key, manifest]])
+      manifests: new Map([[parsed.episodes[0].key, manifest]]),
+      pipelineVersion: "test"
     });
 
     expect(rewritten).toContain("http://localhost:3729/audio/sample/");
@@ -110,7 +111,41 @@ describe("feed", () => {
     const rewritten = rewriteFeed(parsed, {
       publicBaseUrl: "http://localhost:3729",
       podcastSlug: "sample",
-      manifests: new Map([[parsed.episodes[0].key, manifest]])
+      manifests: new Map([[parsed.episodes[0].key, manifest]]),
+      pipelineVersion: "test"
+    });
+
+    expect(rewritten).not.toContain("Sample Episode");
+    expect(rewritten).not.toContain("https://cdn.example.com/episode.mp3");
+  });
+
+  it("omits manifests from older pipeline versions", () => {
+    const parsed = parseFeed(xml, "https://feeds.example.com/show.xml");
+    const manifest: EpisodeManifest = {
+      schemaVersion: 1,
+      pipelineVersion: "old",
+      processingSignature: "signature",
+      podcastSlug: "sample",
+      podcastName: "Sample Show",
+      episodeKey: parsed.episodes[0].key,
+      title: "Sample Episode",
+      guid: "episode-1",
+      sourceUrl: "https://cdn.example.com/episode.mp3",
+      sourceFingerprint: parsed.episodes[0].sourceFingerprint,
+      decisions: [],
+      untimedSignals: [],
+      chapters: [],
+      audio: { status: "completed", removedSeconds: 0, jingleInsertedCount: 0, bytes: 2222, durationSeconds: 3590 },
+      processedDurationSeconds: 3590,
+      costs: { estimatedUsd: 0, actualUsd: 0, llmCalls: 0, notes: [] },
+      generatedAt: new Date(0).toISOString()
+    };
+
+    const rewritten = rewriteFeed(parsed, {
+      publicBaseUrl: "http://localhost:3729",
+      podcastSlug: "sample",
+      manifests: new Map([[parsed.episodes[0].key, manifest]]),
+      pipelineVersion: "current"
     });
 
     expect(rewritten).not.toContain("Sample Episode");

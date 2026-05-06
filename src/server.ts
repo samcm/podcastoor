@@ -11,6 +11,7 @@ import { getAutomationState, startAutomation } from "./automation.js";
 import { getPodcastDeepDive, listPodcastSummaries } from "./library.js";
 import { mapOriginalToProcessed, normalizeSegments, removalSegments, type Segment } from "./timeline.js";
 import { readRecentActivity, type ActivityEvent } from "./activity.js";
+import { PIPELINE_VERSION } from "./pipeline.js";
 
 type DeepDive = NonNullable<Awaited<ReturnType<typeof getPodcastDeepDive>>>;
 type UiEpisode = DeepDive["episodes"][number];
@@ -212,7 +213,8 @@ async function buildRewrittenFeed(config: AppConfig, podcastSlug: string): Promi
   return rewriteFeed(parsed, {
     publicBaseUrl: config.server.publicBaseUrl,
     podcastSlug,
-    manifests
+    manifests,
+    pipelineVersion: PIPELINE_VERSION
   });
 }
 

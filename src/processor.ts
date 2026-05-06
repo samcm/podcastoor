@@ -13,6 +13,7 @@ import { renderEpisodeAudio, downloadAudio } from "./audio.js";
 import { assertBudget, estimateEpisodeCost, recordCost } from "./costs.js";
 import { classifyTranscriptWithOpenRouter, generateChaptersWithOpenRouter } from "./openrouter.js";
 import { appendActivity } from "./activity.js";
+import { PIPELINE_VERSION } from "./pipeline.js";
 
 export interface ProcessRunSummary {
   processed: number;
@@ -30,8 +31,6 @@ export interface ProcessRunSummary {
 }
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
-const PIPELINE_VERSION = "v14-absolute-time-ad-detection";
-
 export async function processFeeds(options: ProcessingOptions): Promise<ProcessRunSummary> {
   const config = await loadConfig(options.configPath);
   const slugs = options.podcastSlug ? [options.podcastSlug] : Object.keys(config.podcasts);

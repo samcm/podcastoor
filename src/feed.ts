@@ -117,7 +117,10 @@ function parsePscChapters(item: Record<string, unknown>): Chapter[] {
     .filter((chapter) => chapter.title);
 }
 
-export function rewriteFeed(parsed: ParsedFeed, options: { publicBaseUrl: string; podcastSlug: string; manifests: Map<string, EpisodeManifest> }): string {
+export function rewriteFeed(
+  parsed: ParsedFeed,
+  options: { publicBaseUrl: string; podcastSlug: string; manifests: Map<string, EpisodeManifest>; pipelineVersion?: string }
+): string {
   const doc = structuredClone(parsed.rawDoc) as Record<string, unknown>;
   delete doc["?xml"];
   const rss = getRecord(doc.rss);
@@ -139,7 +142,7 @@ export function rewriteFeed(parsed: ParsedFeed, options: { publicBaseUrl: string
       const episode = parsed.episodes[index];
       if (!episode) return undefined;
       const manifest = options.manifests.get(episode.key);
-      if (!isPublishableManifest(episode, manifest)) return undefined;
+      if (!isPublishableManifest(episode, manifest, options.pipelineVersion)) return undefined;
       return rewriteEpisodeItem(getRecord(rawItem), episode.key, options, manifest);
     })
     .filter((item): item is Record<string, unknown> => Boolean(item));
@@ -148,8 +151,13 @@ export function rewriteFeed(parsed: ParsedFeed, options: { publicBaseUrl: string
   return `<?xml version="1.0" encoding="UTF-8"?>\n${builder.build(doc)}\n`;
 }
 
-function isPublishableManifest(episode: ParsedEpisode, manifest: EpisodeManifest | undefined): manifest is EpisodeManifest {
-  return Boolean(manifest && manifest.audio.status === "completed" && manifest.sourceFingerprint === episode.sourceFingerprint);
+function isPublishableManifest(episode: ParsedEpisode, manifest: EpisodeManifest | undefined, pipelineVersion?: string): manifest is EpisodeManifest {
+  return Boolean(
+    manifest &&
+      manifest.audio.status === "completed" &&
+      manifest.sourceFingerprint === episode.sourceFingerprint &&
+      (!pipelineVersion || manifest.pipelineVersion === pipelineVersion)
+  );
 }
 
 function rewriteSelfLink(channel: Record<string, unknown>, href: string): void {
