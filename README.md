@@ -2,7 +2,7 @@
 
 A conservative podcast RSS proxy for Pocket Casts. It processes recent episodes, removes model-detected ad/noise windows, rewrites feed metadata, and serves processed audio, transcripts, and chapters from disk.
 
-The default mode is autonomous: on server startup it fetches the configured feeds, processes the last 7 days, downloads audio, transcribes timestamped chunks with an OpenRouter audio-capable model, classifies segments with OpenRouter/DeepSeek, renders processed audio, and serves rewritten feeds/assets.
+The default mode is autonomous: on server startup it fetches the configured feeds, processes the last 7 days, downloads audio, transcribes timestamped chunks with an OpenRouter audio-capable model, classifies segments with OpenRouter/Qwen, renders processed audio, and serves rewritten feeds/assets.
 
 ## Current Shape
 
@@ -18,8 +18,9 @@ The default mode is autonomous: on server startup it fetches the configured feed
 - Disk-backed manifests under `data/podcasts/:podcastSlug/episodes/:episodeKey/manifest.json`.
 - Podlove Simple Chapters parsing and Podcasting 2.0 chapter JSON output.
 - Feed transcript acquisition where feeds expose `podcast:transcript`.
-- Cost-gated provider hooks for OpenRouter audio transcription, OpenAI transcription, feed transcripts, and OpenRouter/DeepSeek text classification.
+- Cost-gated provider hooks for OpenRouter audio transcription, OpenAI transcription, feed transcripts, and OpenRouter text classification.
 - Model-only timed ad decisions. There are no keyword-derived cuts or keyword-derived audit signals.
+- One-time OpenRouter/Nano Banana stamped podcast artwork generation, preserving the upstream cover and adding an `AD-FREE` stamp.
 - ffmpeg render path for cutting removal segments, preserving source MP3 audio with stream-copy where possible, and inserting a short marker tone.
 - Web deep-dive shows RSS duration, real source duration, processed duration, source/processed players, an annotated cut timeline, and collapsed timestamped transcript rows.
 
@@ -43,6 +44,16 @@ podcasts:
         - interviews
       muted:
         - listener questions
+```
+
+Artwork stamping is generic and optional:
+
+```yaml
+artwork:
+  enabled: true
+  model: google/gemini-3.1-flash-image-preview
+  stampText: AD-FREE
+  imageSize: 1K
 ```
 
 ## Run
@@ -100,12 +111,13 @@ transcripts:
       mode: audioChat
       model: xiaomi/mimo-v2-omni
       chunkSeconds: 180
-
 llm:
   provider: openrouter
   enabled: true
   model: qwen/qwen3.6-flash
 ```
+
+OpenRouter is also used for podcast artwork stamping when enabled. The current image model is `google/gemini-3.1-flash-image-preview`, OpenRouter's Nano Banana 2 listing. It edits the upstream cover once, stores the result under the podcast data directory, then rewrites RSS `image`, `itunes:image`, and episode image metadata to the local stamped asset.
 
 There is no fallback model configured. If the model call fails, the service records the failure and does not silently swap to another model.
 
@@ -133,8 +145,9 @@ OpenRouter and OpenAI providers need a downloaded source file, so they only run 
 The current best path with the available key is:
 
 - OpenRouter `xiaomi/mimo-v2-omni` audio chat: best current OpenRouter-only default in the bounded bake-off, tying the best phrase accuracy at lower observed cost while returning usable timestamped JSON segments.
-- DeepSeek V4 Pro on OpenRouter: text-only classifier over segment IDs, with exact request cost recorded from OpenRouter usage when available.
-- ffmpeg: cuts timestamped chunk windows, stream-copies source MP3 audio where possible, and inserts the marker tone.
+- Qwen 3.6 Flash on OpenRouter: text-only classifier over timestamped transcript windows, with exact request cost recorded from OpenRouter usage when available.
+- Nano Banana 2 on OpenRouter: one-off cover-art editing only, not transcription or classification.
+- ffmpeg: cuts timestamped windows with an accurate one-pass filter render, then encodes once at at least the configured/source bitrate and inserts the marker tone.
 
 OpenRouter's dedicated STT endpoint currently returns text plus usage rather than native word timestamps, so the app uses OpenRouter audio-chat transcription by default and asks the audio model for strict timestamped JSON segments. Those timestamps are still model-generated, not forced-alignment timestamps. OpenRouter chat responses include `usage.cost`; the app records that exact model-call cost when present and only falls back to token-price estimates for preflight budgeting.
 
@@ -146,6 +159,9 @@ data/
     removed-ad-tone.mp3
   podcasts/
     example-show/
+      assets/
+        artwork-ad-free.png
+        artwork-ad-free.json
       episodes/
         <episode-key>/
           manifest.json

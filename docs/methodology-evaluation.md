@@ -21,7 +21,8 @@ Checked and exercised on 2026-05-06.
 | ElevenLabs Scribe v2 | Paid by audio duration | Word timestamps + diarization + audio tags | Strong hosted production option, needs `ELEVENLABS_API_KEY`. |
 | OpenAI transcription | Paid per minute | Good transcript endpoint option | Kept as provider option, disabled while OpenRouter audio transcription is preferred. |
 | Qwen 3.6 Flash text classifier | About `$0.0246` observed for a 33.4 min full-episode 7-window ad classification smoke test | Returns absolute source timestamps | Current default classifier after full-episode smoke test. |
-| DeepSeek V4 Pro text classifier | Stronger long-context reasoning with still modest cost | Uses ASR segment IDs or absolute timestamps | Kept as a configurable option, but not the current default after the latest full-episode smoke test. |
+| DeepSeek V4 Pro text classifier | Stronger long-context reasoning with still modest cost | Uses ASR segment IDs or absolute timestamps | Configurable alternative, but not the current default after the latest full-episode smoke test. |
+| OpenRouter Nano Banana 2 `google/gemini-3.1-flash-image-preview` | One-off image generation cost | N/A | Current artwork stamp model only; it does not participate in STT or ad detection. |
 
 ## Bounded STT Bake-Off
 
@@ -65,7 +66,7 @@ The running pipeline is:
 6. Ask the model to return only ad/noise windows as absolute source-timeline `startTime`/`endTime` values.
 7. Map those absolute decisions back to transcript segments for audit text.
 8. Merge adjacent model-confirmed ad blocks across short non-editorial gaps, then pad removal windows.
-9. Render with ffmpeg, stream-copying source MP3 audio where possible, and insert the marker tone.
+9. Render with a one-pass ffmpeg filter graph using `atrim`/`concat`, encoding once at at least the configured/source bitrate, and insert the marker tone.
 10. Rewrite RSS to local audio, chapter, and transcript URLs.
 
 ## Deployment Evaluation
@@ -97,7 +98,7 @@ Feed duration cannot be trusted as the render timeline. Dynamic ad insertion can
 
 ## Conclusion
 
-For this project, the current best available default with only `OPENROUTER_API_KEY` is OpenRouter `xiaomi/mimo-v2-omni` audio-chat transcription plus `qwen/qwen3.6-flash` for text classification. It is not the final alignment answer, but it gives better OpenRouter-only timing granularity than the dedicated STT wrapper while passing the full-episode ad-block smoke test that cheaper Gemini and DeepSeek Flash classifier passes missed or overreached.
+For this project, the current best available default with only `OPENROUTER_API_KEY` is OpenRouter `xiaomi/mimo-v2-omni` audio-chat transcription plus `qwen/qwen3.6-flash` for text classification. It is not the final alignment answer, but it gives better OpenRouter-only timing granularity than the dedicated STT wrapper while passing the full-episode ad-block smoke test that cheaper Gemini and DeepSeek Flash classifier passes missed or overreached. Edited audio is now rendered with a single accurate ffmpeg filter graph rather than MP3 stream-copy segment concatenation, because stream-copy cuts can introduce MP3 timestamp/seek drift.
 
 For laser-focused cuts, the next implementation should add a real alignment provider. The preferred path is:
 

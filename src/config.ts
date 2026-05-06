@@ -65,6 +65,12 @@ export const defaultConfig: AppConfig = {
       gainDb: -12
     }
   },
+  artwork: {
+    enabled: true,
+    model: "google/gemini-3.1-flash-image-preview",
+    stampText: "AD-FREE",
+    imageSize: "1K"
+  },
   transcripts: {
     preferred: "openRouter",
     providers: {

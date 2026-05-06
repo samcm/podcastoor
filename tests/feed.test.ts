@@ -40,6 +40,7 @@ describe("feed", () => {
   it("parses episodes and rewrites completed manifests to local assets", () => {
     const parsed = parseFeed(xml, "https://feeds.example.com/show.xml");
     expect(parsed.title).toBe("Sample Show");
+    expect(parsed.imageUrl).toBe("https://cdn.example.com/art.jpg");
     expect(parsed.episodes[0].title).toBe("Sample Episode");
     expect(parsed.episodes[0].chapters).toHaveLength(2);
 
@@ -68,7 +69,8 @@ describe("feed", () => {
       publicBaseUrl: "http://localhost:3729",
       podcastSlug: "sample",
       manifests: new Map([[parsed.episodes[0].key, manifest]]),
-      pipelineVersion: "test"
+      pipelineVersion: "test",
+      artworkUrl: "http://localhost:3729/assets/sample/artwork.png?v=1"
     });
 
     expect(rewritten).toContain("http://localhost:3729/audio/sample/");
@@ -77,6 +79,8 @@ describe("feed", () => {
     expect(rewritten).toContain('href="http://localhost:3729/feeds/sample.xml"');
     expect(rewritten).toContain("<itunes:new-feed-url>http://localhost:3729/feeds/sample.xml</itunes:new-feed-url>");
     expect(rewritten).toContain("<title>Sample Show (Ad Free)</title>");
+    expect(rewritten).toContain("<url>http://localhost:3729/assets/sample/artwork.png?v=1</url>");
+    expect(rewritten).toContain('href="http://localhost:3729/assets/sample/artwork.png?v=1"');
     expect(rewritten).toContain("Sample Episode (Ad Free)");
     expect(rewritten).toContain("Podcast Proxy");
     expect(rewritten).toContain("Time saved");

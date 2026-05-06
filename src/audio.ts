@@ -112,33 +112,15 @@ export async function renderEpisodeAudio(params: {
   }
 
   await ensureDir(paths.dir);
-  const renderMode = params.config.audio.preserveSourceQuality && sourceInfo.codec === "mp3" ? "source-copy" : "encode";
-  const outputBitrateKbps = sourceInfo.bitrateKbps ?? params.config.audio.outputBitrateKbps;
-  const jinglePath = params.config.audio.jingle.enabled
-    ? await ensureJingle(params.config, {
-        outputPath: renderMode === "source-copy" ? path.join(paths.dir, "removed-ad-tone.mp3") : undefined,
-        bitrateKbps: outputBitrateKbps,
-        sampleRate: sourceInfo.sampleRate,
-        channels: sourceInfo.channels
-      })
-    : undefined;
-  const pieces: string[] = [];
   const keeps = keepSegments(sourceDuration, removed);
-  for (let index = 0; index < keeps.length; index += 1) {
-    const keep = keeps[index];
-    const piecePath = path.join(paths.dir, `piece-${String(index).padStart(3, "0")}.mp3`);
-    await renderKeepSegment(paths.sourceAudio, piecePath, keep, renderMode, {
-      bitrateKbps: outputBitrateKbps,
-      sampleRate: sourceInfo.sampleRate,
-      channels: sourceInfo.channels
-    });
-    pieces.push(piecePath);
-    if (jinglePath && index < keeps.length - 1) pieces.push(jinglePath);
-  }
+  const outputBitrateKbps = Math.max(sourceInfo.bitrateKbps ?? 0, params.config.audio.outputBitrateKbps);
+  const jingleInsertedCount = params.config.audio.jingle.enabled ? Math.max(0, keeps.length - 1) : 0;
 
-  const listPath = path.join(paths.dir, "concat.txt");
-  await writeFile(listPath, pieces.map((piece) => `file '${piece.replaceAll("'", "'\\''")}'`).join("\n"), "utf8");
-  await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", paths.processedAudio]);
+  await renderAccurateEdit(paths.sourceAudio, paths.processedAudio, keeps, params.config, {
+    bitrateKbps: outputBitrateKbps,
+    sampleRate: sourceInfo.sampleRate,
+    channels: sourceInfo.channels
+  });
   return {
     status: "completed",
     sourcePath: paths.sourceAudio,
@@ -147,36 +129,77 @@ export async function renderEpisodeAudio(params: {
     sourceDurationSeconds: sourceDuration,
     durationSeconds: await probeDuration(paths.processedAudio),
     removedSeconds,
-    jingleInsertedCount: jinglePath ? Math.max(0, pieces.filter((piece) => piece === jinglePath).length) : 0,
-    renderMode,
+    jingleInsertedCount,
+    renderMode: "encode",
     codec: sourceInfo.codec,
     bitrateKbps: outputBitrateKbps
   };
 }
 
-async function renderKeepSegment(
+async function renderAccurateEdit(
   sourcePath: string,
-  piecePath: string,
-  keep: { start: number; end: number },
-  renderMode: "source-copy" | "encode",
+  outputPath: string,
+  keeps: Array<{ start: number; end: number }>,
+  config: AppConfig,
   options: { bitrateKbps: number; sampleRate?: number; channels?: number }
 ): Promise<void> {
-  const common = ["-y", "-ss", String(keep.start), "-t", String(keep.end - keep.start), "-i", sourcePath, "-vn"];
-  if (renderMode === "source-copy") {
-    await runFfmpeg([...common, "-acodec", "copy", piecePath]);
+  if (keeps.length === 0) {
+    await runFfmpeg([
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      `anullsrc=channel_layout=${channelLayout(options.channels)}:sample_rate=${options.sampleRate ?? 44100}`,
+      "-t",
+      "0.1",
+      "-acodec",
+      "libmp3lame",
+      "-b:a",
+      `${options.bitrateKbps}k`,
+      outputPath
+    ]);
     return;
   }
 
+  const sampleRate = options.sampleRate ?? 44100;
+  const layout = channelLayout(options.channels);
+  const filters: string[] = [];
+  const concatLabels: string[] = [];
+  for (const [index, keep] of keeps.entries()) {
+    const keepLabel = `a${index}`;
+    filters.push(
+      `[0:a]atrim=start=${keep.start.toFixed(6)}:end=${keep.end.toFixed(6)},asetpts=PTS-STARTPTS,aresample=${sampleRate},aformat=channel_layouts=${layout}[${keepLabel}]`
+    );
+    concatLabels.push(`[${keepLabel}]`);
+    if (config.audio.jingle.enabled && index < keeps.length - 1) {
+      const toneLabel = `j${index}`;
+      filters.push(
+        `sine=frequency=${config.audio.jingle.frequencyHz}:duration=${config.audio.jingle.durationSeconds}:sample_rate=${sampleRate},volume=${config.audio.jingle.gainDb}dB,aformat=channel_layouts=${layout}[${toneLabel}]`
+      );
+      concatLabels.push(`[${toneLabel}]`);
+    }
+  }
+  filters.push(`${concatLabels.join("")}concat=n=${concatLabels.length}:v=0:a=1[out]`);
+
   await runFfmpeg([
-    ...common,
-    ...(options.sampleRate ? ["-ar", String(options.sampleRate)] : []),
-    ...(options.channels ? ["-ac", String(options.channels)] : []),
+    "-y",
+    "-i",
+    sourcePath,
+    "-filter_complex",
+    filters.join(";"),
+    "-map",
+    "[out]",
+    "-vn",
     "-acodec",
     "libmp3lame",
     "-b:a",
     `${options.bitrateKbps}k`,
-    piecePath
+    outputPath
   ]);
+}
+
+function channelLayout(channels: number | undefined): "mono" | "stereo" {
+  return channels === 1 ? "mono" : "stereo";
 }
 
 async function probeDuration(filePath: string, fallback?: number): Promise<number> {

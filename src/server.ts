@@ -5,8 +5,8 @@ import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { AppConfig, EpisodeManifest } from "./types.js";
 import { loadConfig, resolvePodcastConfig } from "./config.js";
 import { fetchFeed, parseFeed, rewriteFeed } from "./feed.js";
-import { episodePaths, readManifest } from "./storage.js";
-import { pathExists, readJson } from "./utils.js";
+import { episodePaths, podcastAssetPaths, readManifest } from "./storage.js";
+import { absoluteUrl, pathExists, readJson } from "./utils.js";
 import { getAutomationState, startAutomation } from "./automation.js";
 import { getPodcastDeepDive, listPodcastSummaries } from "./library.js";
 import { mapOriginalToProcessed, normalizeSegments, removalSegments, type Segment } from "./timeline.js";
@@ -126,6 +126,19 @@ export function buildServer(config: AppConfig) {
     return reply.send(createReadStream(paths.transcriptVtt));
   });
 
+  app.get("/assets/:podcastSlug/artwork.png", async (request, reply) => {
+    const { podcastSlug } = request.params as { podcastSlug: string };
+    const paths = podcastAssetPaths(config, podcastSlug);
+    if (!(await pathExists(paths.artwork))) {
+      reply.code(404);
+      return { error: "artwork not found" };
+    }
+    const meta = await readJson<{ outputMimeType?: string }>(paths.artworkMeta);
+    reply.type(meta?.outputMimeType || "image/png");
+    reply.header("Cache-Control", "public, max-age=86400");
+    return reply.send(createReadStream(paths.artwork));
+  });
+
   app.get("/metrics", async () => {
     const costs = await readJson(path.join(config.storage.dataDir, "usage", "costs.json"));
     return {
@@ -210,12 +223,21 @@ async function buildRewrittenFeed(config: AppConfig, podcastSlug: string): Promi
     const manifest = await readManifest(config, podcastSlug, episode.key);
     if (manifest) manifests.set(episode.key, manifest);
   }
+  const artworkUrl = await localArtworkUrl(config, podcastSlug);
   return rewriteFeed(parsed, {
     publicBaseUrl: config.server.publicBaseUrl,
     podcastSlug,
     manifests,
-    pipelineVersion: PIPELINE_VERSION
+    pipelineVersion: PIPELINE_VERSION,
+    artworkUrl
   });
+}
+
+async function localArtworkUrl(config: AppConfig, podcastSlug: string): Promise<string | undefined> {
+  const paths = podcastAssetPaths(config, podcastSlug);
+  if (!(await pathExists(paths.artwork))) return undefined;
+  const info = await stat(paths.artwork);
+  return absoluteUrl(config.server.publicBaseUrl, `/assets/${podcastSlug}/artwork.png?v=${encodeURIComponent(String(Math.floor(info.mtimeMs)))}`);
 }
 
 function renderPodcastList(
@@ -346,7 +368,7 @@ function renderTimelines(episode: UiEpisode, config: DeepDiveConfig): string {
       (removal, index) => `<li>
         <button data-jump-source="${removal.start.toFixed(3)}">Source ${formatSeconds(removal.start)}</button>
         <button data-jump-processed="${mapOriginalToProcessed(removal.start, removals, jingleDuration).toFixed(3)}">Processed splice</button>
-        <span>${index + 1}. ${escapeHtml(reasonsForWindow(episode, removal).map(compactReason).join("; "))}</span>
+        <span>${index + 1}. ${escapeHtml(labelsForWindow(episode, removal).map(compactReason).join("; "))}</span>
         <small>${formatSeconds(removal.end - removal.start)} removed</small>
       </li>`
     )
@@ -355,7 +377,7 @@ function renderTimelines(episode: UiEpisode, config: DeepDiveConfig): string {
     .map((removal) => {
       const left = Math.max(0, Math.min(100, (removal.start / sourceDuration) * 100));
       const width = Math.max(0.4, Math.min(100 - left, ((removal.end - removal.start) / sourceDuration) * 100));
-      const label = `${formatSeconds(removal.start)}-${formatSeconds(removal.end)} ${reasonsForWindow(episode, removal).join("; ")}`;
+      const label = `${formatSeconds(removal.start)}-${formatSeconds(removal.end)} ${labelsForWindow(episode, removal).join("; ")}`;
       return `<span class="cut" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%" title="${escapeHtml(label)}"></span>`;
     })
     .join("");
@@ -401,13 +423,16 @@ function renderDecisionTable(episode: UiEpisode, config: DeepDiveConfig): string
     .sort((a, b) => a.start - b.start)
     .map((decision) => {
       const processedSplice = mapOriginalToProcessed(decision.start, removals, jingleDuration);
+      const renderWindow = renderWindowForDecision(decision, removals);
       return `<tr>
         <td><button data-jump-source="${decision.start.toFixed(3)}">${formatSeconds(decision.start)}</button></td>
         <td>${formatSeconds(decision.end)}</td>
         <td>${formatSeconds(decision.end - decision.start)}</td>
+        <td>${renderWindow ? `${formatSeconds(renderWindow.start)}-${formatSeconds(renderWindow.end)}` : "not cut"}</td>
         <td><button data-jump-processed="${processedSplice.toFixed(3)}">${formatSeconds(processedSplice)}</button></td>
         <td>${(decision.confidence * 100).toFixed(0)}%</td>
         <td>${escapeHtml(decision.action)}</td>
+        <td>${escapeHtml(decision.advertiser ?? "unknown")}</td>
         <td>${escapeHtml(decision.reason)}</td>
       </tr>`;
     })
@@ -415,7 +440,7 @@ function renderDecisionTable(episode: UiEpisode, config: DeepDiveConfig): string
   return `<section class="audit-table">
     <h3>Decisions</h3>
     <table>
-      <thead><tr><th>Source Start</th><th>Source End</th><th>Duration</th><th>Processed Splice</th><th>Confidence</th><th>Action</th><th>Reason</th></tr></thead>
+      <thead><tr><th>Model Start</th><th>Model End</th><th>Model Duration</th><th>Rendered Cut</th><th>Processed Splice</th><th>Confidence</th><th>Action</th><th>Advertiser</th><th>Reason</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </section>`;
@@ -457,39 +482,44 @@ function renderTranscript(
   const removals = actualRemovalWindows(episode, sourceDuration, config);
   const sourceRows = segments
     .map((segment, index) => {
-      const removed = segmentOverlapsRemoval(segment, removals);
-      return `<tr class="${removed ? "removed-row" : ""}" id="source-segment-${index}">
+      const status = segmentRemovalStatus(segment, removals);
+      const className = status.kind === "removed" ? "removed-row" : status.kind === "partial" ? "partial-row" : "";
+      return `<tr class="${className}" id="source-segment-${index}">
         <td><button data-jump-source="${segment.start.toFixed(3)}">${formatSeconds(segment.start)}</button></td>
         <td>${formatSeconds(segment.end)}</td>
-        <td>${removed ? '<span class="pill danger">removed</span>' : '<span class="pill">kept</span>'}</td>
+        <td>${renderSegmentStatus(status)}</td>
         <td>${escapeHtml(segment.text)}</td>
       </tr>`;
     })
     .join("");
   const processedRows = segments
-    .filter((segment) => !segmentOverlapsRemoval(segment, removals))
+    .filter((segment) => segmentRemovalStatus(segment, removals).kind !== "removed")
     .map((segment, index) => {
-      const start = mapOriginalToProcessed(segment.start, removals, jingleDuration);
-      const end = mapOriginalToProcessed(segment.end, removals, jingleDuration);
+      const visible = visibleSegmentWindow(segment, removals);
+      const start = mapOriginalToProcessed(visible.start, removals, jingleDuration);
+      const end = mapOriginalToProcessed(visible.end, removals, jingleDuration);
+      const status = segmentRemovalStatus(segment, removals);
       return `<tr id="processed-segment-${index}">
         <td><button data-jump-processed="${start.toFixed(3)}">${formatSeconds(start)}</button></td>
         <td>${formatSeconds(end)}</td>
         <td>${formatSeconds(segment.start)}</td>
-        <td>${escapeHtml(segment.text)}</td>
+        <td>${status.kind === "partial" ? '<span class="pill warn">partial cut</span> ' : ""}${escapeHtml(segment.text)}</td>
       </tr>`;
     })
     .join("");
-  const removedCount = segments.filter((segment) => segmentOverlapsRemoval(segment, removals)).length;
+  const statuses = segments.map((segment) => segmentRemovalStatus(segment, removals));
+  const removedCount = statuses.filter((status) => status.kind === "removed").length;
+  const partialCount = statuses.filter((status) => status.kind === "partial").length;
   return `<section class="transcript-wrap">
     <details class="transcript">
-      <summary>Source transcript (${segments.length} segments, ${removedCount} removed)</summary>
+      <summary>Source transcript (${segments.length} segments, ${removedCount} removed, ${partialCount} partial)</summary>
       <table>
         <thead><tr><th>Start</th><th>End</th><th>Status</th><th>Text</th></tr></thead>
         <tbody>${sourceRows}</tbody>
       </table>
     </details>
     <details class="transcript">
-      <summary>Processed transcript (${segments.length - removedCount} remaining, remapped)</summary>
+      <summary>Processed transcript (${segments.length - removedCount} remaining, ${partialCount} partial, remapped)</summary>
     <table>
         <thead><tr><th>Processed</th><th>End</th><th>Source</th><th>Text</th></tr></thead>
         <tbody>${processedRows}</tbody>
@@ -571,8 +601,10 @@ function page(title: string, body: string): string {
     .transcript td:first-child, .transcript td:nth-child(2), .transcript td:nth-child(3) { white-space:nowrap; color:var(--muted); width:74px; }
     .removed-row td { background:rgba(220,38,38,.08); }
     .removed-row td:last-child { text-decoration:line-through; color:#7f1d1d; }
+    .partial-row td { background:rgba(245,158,11,.10); }
     .pill { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:999px; padding:2px 7px; color:var(--muted); font-size:11px; }
     .pill.danger { border-color:rgba(220,38,38,.35); color:#991b1b; background:rgba(220,38,38,.08); }
+    .pill.warn { border-color:rgba(217,119,6,.35); color:#92400e; background:rgba(245,158,11,.10); }
     @media (max-width: 760px) {
       .activity li { grid-template-columns:1fr; }
       .cut-list li { grid-template-columns:1fr 1fr; }
@@ -679,18 +711,55 @@ function actualRemovalWindows(
   });
 }
 
-function reasonsForWindow(
+function labelsForWindow(
   episode: NonNullable<Awaited<ReturnType<typeof getPodcastDeepDive>>>["episodes"][number],
   window: Segment
 ): string[] {
   const reasons = episode.decisions
     .filter((decision) => decision.action === "remove" && decision.end > window.start && decision.start < window.end)
-    .map((decision) => decision.reason);
+    .map((decision) => [decision.advertiser, decision.reason].filter(Boolean).join(": "));
   return Array.from(new Set(reasons)).slice(0, 3);
 }
 
-function segmentOverlapsRemoval(segment: { start: number; end: number }, removals: Segment[]): boolean {
-  return removals.some((removal) => segment.end > removal.start && segment.start < removal.end);
+function segmentRemovalStatus(segment: { start: number; end: number }, removals: Segment[]): { kind: "kept" | "partial" | "removed"; overlapSeconds: number; ranges: Segment[] } {
+  const ranges = removals
+    .map((removal) => ({ start: Math.max(segment.start, removal.start), end: Math.min(segment.end, removal.end) }))
+    .filter((range) => range.end > range.start);
+  const overlapSeconds = ranges.reduce((sum, range) => sum + (range.end - range.start), 0);
+  const duration = Math.max(0, segment.end - segment.start);
+  if (overlapSeconds <= 0.01) return { kind: "kept", overlapSeconds: 0, ranges: [] };
+  if (overlapSeconds >= Math.max(0, duration - 0.05)) return { kind: "removed", overlapSeconds, ranges };
+  return { kind: "partial", overlapSeconds, ranges };
+}
+
+function renderSegmentStatus(status: ReturnType<typeof segmentRemovalStatus>): string {
+  if (status.kind === "removed") return `<span class="pill danger">removed</span>`;
+  if (status.kind === "partial") {
+    const ranges = status.ranges.map((range) => `${formatSeconds(range.start)}-${formatSeconds(range.end)}`).join(", ");
+    return `<span class="pill warn">partial ${formatSeconds(status.overlapSeconds)}</span>${ranges ? ` <small>${escapeHtml(ranges)}</small>` : ""}`;
+  }
+  return `<span class="pill">kept</span>`;
+}
+
+function visibleSegmentWindow(segment: { start: number; end: number }, removals: Segment[]): Segment {
+  let start = segment.start;
+  let end = segment.end;
+  for (const removal of removals) {
+    if (removal.end <= start || removal.start >= end) continue;
+    if (removal.start <= start && removal.end < end) {
+      start = removal.end;
+      continue;
+    }
+    if (removal.start > start && removal.end >= end) {
+      end = removal.start;
+      continue;
+    }
+  }
+  return end > start ? { start, end } : segment;
+}
+
+function renderWindowForDecision(decision: { start: number; end: number }, removals: Segment[]): Segment | undefined {
+  return removals.find((removal) => removal.end >= decision.start && removal.start <= decision.end);
 }
 
 function compactReason(reason: string): string {

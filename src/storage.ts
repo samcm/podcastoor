@@ -14,8 +14,23 @@ export interface EpisodePaths {
   jingle: string;
 }
 
+export interface PodcastAssetPaths {
+  dir: string;
+  artwork: string;
+  artworkMeta: string;
+}
+
 export function podcastDir(config: AppConfig, podcastSlug: string): string {
   return path.join(config.storage.dataDir, "podcasts", podcastSlug);
+}
+
+export function podcastAssetPaths(config: AppConfig, podcastSlug: string): PodcastAssetPaths {
+  const dir = path.join(podcastDir(config, podcastSlug), "assets");
+  return {
+    dir,
+    artwork: path.join(dir, "artwork-ad-free.png"),
+    artworkMeta: path.join(dir, "artwork-ad-free.json")
+  };
 }
 
 export function episodePaths(config: AppConfig, podcastSlug: string, episodeKey: string): EpisodePaths {

@@ -17,6 +17,7 @@ type ParsedAdSegment = {
   action?: "remove" | "keep" | "mark-only";
   confidence?: number;
   reason?: string;
+  advertiser?: string;
   startOffsetSeconds?: number;
   endOffsetSeconds?: number;
 };
@@ -90,7 +91,14 @@ export async function classifyTranscriptWithOpenRouter(
     } catch (error) {
       notes.push(`Window ${windowIndex + 1}/${windows.length} classification failed: ${String(error)}`);
       logClassifierWindow("failed", windowIndex, windows.length, windowSegments, { error: String(error) });
+      if (isFatalOpenRouterError(error)) {
+        throw new Error(`OpenRouter ad detection failed for window ${windowIndex + 1}/${windows.length}: ${String(error)}`);
+      }
     }
+  }
+
+  if (notes.length > 0) {
+    throw new Error(`OpenRouter ad detection failed for ${notes.length}/${windows.length} transcript windows: ${notes.slice(0, 3).join(" | ")}`);
   }
 
   const decisions = coalesceModelAdBlocks(
@@ -167,9 +175,10 @@ function buildClassifierPrompt(
     "If a commercial read spans adjacent segments inside this window, merge it into one range.",
     "If multiple commercial reads are separated only by silence, music, or non-editorial transition, they may be returned as one continuous removable break.",
     "Use action remove for confident ads/noise. Use mark-only only when it is a weak clue that should not be cut.",
-    "Do not generate chapters, summaries, notes, reasoning, or explanations. Keep reason values to 2-6 words.",
+    "For each removable span, identify the likely advertiser, product, service, event, subscription, publisher, or organization being promoted. Use advertiser:\"unknown\" only when the promoted entity is not inferable from this window.",
+    "Do not generate chapters, summaries, notes, reasoning, or explanations. Keep reason values to 2-6 words. Keep advertiser values to the shortest useful name.",
     "Strict JSON only with this shape and no extra keys:",
-    "{\"adSegments\":[{\"startTime\":12.4,\"endTime\":48.9,\"action\":\"remove\",\"confidence\":0.9,\"reason\":\"commercial read\"}]}",
+    "{\"adSegments\":[{\"startTime\":12.4,\"endTime\":48.9,\"action\":\"remove\",\"confidence\":0.9,\"reason\":\"commercial read\",\"advertiser\":\"Example Brand\"}]}",
     "Segments:",
     JSON.stringify(segments)
   ].join("\n\n");
@@ -212,7 +221,7 @@ function classifierBody(prompt: string, maxTranscriptChars: number): Record<stri
       { role: "user", content: prompt.slice(0, maxTranscriptChars) }
     ],
     temperature: 0,
-    max_tokens: 700,
+    max_tokens: 900,
     response_format: { type: "json_object" }
   };
 }
@@ -344,6 +353,11 @@ function mergeUsage(primary: LlmUsage | undefined, fallback: LlmUsage | undefine
   };
 }
 
+function isFatalOpenRouterError(error: unknown): boolean {
+  const message = String(error);
+  return /\b(401|402|403)\b/.test(message) || /insufficient credits|requires at least|unauthorized|forbidden/i.test(message);
+}
+
 function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -396,6 +410,7 @@ export function parsedAdSegmentToDecision(entry: ParsedAdSegment, transcript: Tr
     action: entry.action ?? "remove",
     confidence: Math.max(0, Math.min(1, entry.confidence ?? 0.75)),
     reason: (entry.reason ?? "model ad classification").slice(0, 120),
+    advertiser: normalizeAdvertiser(entry.advertiser),
     source: "model",
     alignment: {
       startSegmentIndex,
@@ -493,6 +508,7 @@ function coalesceModelAdBlocks(decisions: SegmentDecision[], segments: Transcrip
       previous.end = Math.max(previous.end, decision.end);
       previous.confidence = Math.min(previous.confidence, decision.confidence);
       previous.reason = previous.reason === decision.reason ? previous.reason : "commercial block";
+      previous.advertiser = mergeAdvertisers(previous.advertiser, decision.advertiser);
       previous.alignment = {
         startSegmentIndex: previous.alignment?.startSegmentIndex,
         endSegmentIndex: decision.alignment?.endSegmentIndex ?? previous.alignment?.endSegmentIndex,
@@ -504,6 +520,18 @@ function coalesceModelAdBlocks(decisions: SegmentDecision[], segments: Transcrip
     merged.push({ ...decision });
   }
   return [...merged, ...other].sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+function normalizeAdvertiser(value: string | undefined): string | undefined {
+  const cleaned = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!cleaned || /^unknown|n\/a|null|none$/i.test(cleaned)) return undefined;
+  return cleaned.slice(0, 80);
+}
+
+function mergeAdvertisers(first: string | undefined, second: string | undefined): string | undefined {
+  const values = [first, second].filter((value): value is string => Boolean(value));
+  const unique = Array.from(new Set(values.flatMap((value) => value.split(/\s*;\s*/)).filter(Boolean)));
+  return unique.slice(0, 3).join("; ") || undefined;
 }
 
 function clampSegmentIndex(value: number, length: number): number {

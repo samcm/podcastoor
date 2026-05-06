@@ -46,6 +46,13 @@ export interface AudioConfig {
   jingle: JingleConfig;
 }
 
+export interface ArtworkConfig {
+  enabled: boolean;
+  model: string;
+  stampText: string;
+  imageSize: "1K" | "2K" | "4K";
+}
+
 export interface TranscriptProviderConfig {
   preferred: "feed" | "openai" | "openRouter" | "pocketCasts";
   providers: {
@@ -121,6 +128,7 @@ export interface AppConfig {
   automation: AutomationConfig;
   costs: CostConfig;
   audio: AudioConfig;
+  artwork: ArtworkConfig;
   transcripts: TranscriptProviderConfig;
   llm: LlmConfig;
   detection: DetectionConfig;
@@ -178,6 +186,7 @@ export interface ParsedFeed {
   xml: string;
   title: string;
   feedUrl: string;
+  imageUrl?: string;
   episodes: ParsedEpisode[];
 }
 
@@ -210,6 +219,7 @@ export interface SegmentDecision {
   action: SegmentAction;
   confidence: number;
   reason: string;
+  advertiser?: string;
   source: "transcript-rule" | "description-rule" | "model" | "manual";
   alignment?: {
     startSegmentIndex?: number;

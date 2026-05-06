@@ -23,7 +23,8 @@ describe("openrouter ad parsing", () => {
         endSegment: 2,
         action: "remove",
         confidence: 0.93,
-        reason: "commercial read"
+        reason: "commercial read",
+        advertiser: "Example Brand"
       },
       transcript
     );
@@ -33,6 +34,7 @@ describe("openrouter ad parsing", () => {
       end: 18.75,
       action: "remove",
       confidence: 0.93,
+      advertiser: "Example Brand",
       alignment: {
         startSegmentIndex: 0,
         endSegmentIndex: 1,

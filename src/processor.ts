@@ -14,6 +14,7 @@ import { assertBudget, estimateEpisodeCost, recordCost } from "./costs.js";
 import { classifyTranscriptWithOpenRouter, generateChaptersWithOpenRouter } from "./openrouter.js";
 import { appendActivity } from "./activity.js";
 import { PIPELINE_VERSION } from "./pipeline.js";
+import { ensurePodcastArtwork } from "./artwork.js";
 
 export interface ProcessRunSummary {
   processed: number;
@@ -61,6 +62,7 @@ export async function processFeeds(options: ProcessingOptions): Promise<ProcessR
 }
 
 async function processPodcast(config: AppConfig, podcast: EffectivePodcastConfig, options: ProcessingOptions): Promise<ProcessRunSummary["podcasts"][number]> {
+  const dryRun = options.dryRun ?? podcast.processing.dryRun;
   logger.info({ podcast: podcast.slug, feedUrl: podcast.feedUrl }, "fetching feed");
   await recordActivity(config, {
     level: "info",
@@ -80,6 +82,30 @@ async function processPodcast(config: AppConfig, podcast: EffectivePodcastConfig
     message: "Feed parsed",
     details: { feedTitle: feed.title, discovered: feed.episodes.length, eligible: eligible.length }
   });
+  if (!dryRun) {
+    try {
+      const artwork = await ensurePodcastArtwork(config, podcast.slug, feed);
+      if (artwork.status === "generated" || artwork.status === "exists") {
+        logger.info({ podcast: podcast.slug, artworkStatus: artwork.status, model: artwork.model }, "podcast artwork ready");
+        await recordActivity(config, {
+          level: "info",
+          scope: "worker",
+          podcastSlug: podcast.slug,
+          message: "Podcast artwork ready",
+          details: { status: artwork.status, model: artwork.model }
+        });
+      }
+    } catch (error) {
+      logger.warn({ podcast: podcast.slug, err: error }, "podcast artwork generation failed");
+      await recordActivity(config, {
+        level: "warn",
+        scope: "worker",
+        podcastSlug: podcast.slug,
+        message: "Podcast artwork generation failed",
+        details: { error: String(error) }
+      });
+    }
+  }
 
   let processed = 0;
   let skipped = 0;
@@ -198,7 +224,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   }
 
   const reusableTranscriptCandidate =
-    existing?.sourceFingerprint === episode.sourceFingerprint ? await readJson<Transcript>(paths.transcriptJson) : undefined;
+    !existing || existing.sourceFingerprint === episode.sourceFingerprint ? await readJson<Transcript>(paths.transcriptJson) : undefined;
   const reusableTranscript = isTranscriptReusable(podcast, reusableTranscriptCandidate) ? reusableTranscriptCandidate : undefined;
   const transcript =
     reusableTranscript?.text || reusableTranscript?.segments.length
@@ -277,6 +303,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
         message: "Model detection failed",
         details: { error: String(error) }
       });
+      throw error;
     }
   }
   detection.decisions = dedupeSegmentDecisions(detection.decisions);

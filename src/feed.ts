@@ -45,8 +45,15 @@ export function parseFeed(xml: string, feedUrl: string): ParsedFeed {
     xml,
     feedUrl,
     title: textOf(channel.title),
+    imageUrl: parseFeedImageUrl(channel, feedUrl),
     episodes
   };
+}
+
+function parseFeedImageUrl(channel: Record<string, unknown>, feedUrl: string): string | undefined {
+  const itunesImage = textOf(getRecord(channel["itunes:image"])["@_href"]);
+  const rssImage = textOf(getRecord(channel.image).url);
+  return absoluteMaybe(itunesImage || rssImage, feedUrl);
 }
 
 function parseEpisode(raw: unknown, feedUrl: string): ParsedEpisode {
@@ -119,7 +126,7 @@ function parsePscChapters(item: Record<string, unknown>): Chapter[] {
 
 export function rewriteFeed(
   parsed: ParsedFeed,
-  options: { publicBaseUrl: string; podcastSlug: string; manifests: Map<string, EpisodeManifest>; pipelineVersion?: string }
+  options: { publicBaseUrl: string; podcastSlug: string; manifests: Map<string, EpisodeManifest>; pipelineVersion?: string; artworkUrl?: string }
 ): string {
   const doc = structuredClone(parsed.rawDoc) as Record<string, unknown>;
   delete doc["?xml"];
@@ -135,6 +142,7 @@ export function rewriteFeed(
   const proxyFeedUrl = absoluteUrl(options.publicBaseUrl, `/feeds/${options.podcastSlug}.xml`);
   channel["itunes:new-feed-url"] = proxyFeedUrl;
   rewriteImageTitle(channel, adFreeChannelTitle);
+  if (options.artworkUrl) rewriteArtworkUrl(channel, options.artworkUrl, adFreeChannelTitle);
   rewriteSelfLink(channel, proxyFeedUrl);
 
   const items = asArray(channel.item)
@@ -183,10 +191,21 @@ function rewriteImageTitle(channel: Record<string, unknown>, title: string): voi
   channel.image = image;
 }
 
+function rewriteArtworkUrl(channel: Record<string, unknown>, artworkUrl: string, title: string): void {
+  const image = getRecord(channel.image);
+  image.url = artworkUrl;
+  image.title = title;
+  channel.image = image;
+
+  const itunesImage = getRecord(channel["itunes:image"]);
+  itunesImage["@_href"] = artworkUrl;
+  channel["itunes:image"] = itunesImage;
+}
+
 function rewriteEpisodeItem(
   item: Record<string, unknown>,
   episodeKeyValue: string,
-  options: { publicBaseUrl: string; podcastSlug: string },
+  options: { publicBaseUrl: string; podcastSlug: string; artworkUrl?: string },
   manifest: EpisodeManifest
 ): Record<string, unknown> {
   const version = assetVersion(manifest);
@@ -197,6 +216,11 @@ function rewriteEpisodeItem(
   const adFreeTitle = withAdFreeSuffix(title);
   item.title = adFreeTitle;
   item["itunes:title"] = adFreeTitle;
+  if (options.artworkUrl) {
+    const episodeImage = getRecord(item["itunes:image"]);
+    episodeImage["@_href"] = options.artworkUrl;
+    item["itunes:image"] = episodeImage;
+  }
 
   const enclosure = getRecord(item.enclosure);
   enclosure["@_url"] = audioUrl;
@@ -271,31 +295,78 @@ function buildProxyMetadataBlock(manifest: EpisodeManifest): string {
   const savedSeconds = sourceDuration != null && processedDuration != null ? Math.max(0, sourceDuration - processedDuration) : undefined;
   const topDecisions = manifest.decisions
     .filter((decision) => decision.action === "remove")
-    .slice(0, 8)
-    .map((decision) => `<li>${escapeHtml(formatPscStart(decision.start))}-${escapeHtml(formatPscStart(decision.end))}: ${escapeHtml(decision.reason)}</li>`)
+    .map((decision) => `<li>${escapeHtml(formatPscStart(decision.start))}-${escapeHtml(formatPscStart(decision.end))}: ${escapeHtml(formatDecisionLabel(decision))}</li>`)
     .join("");
   const llmCost = (manifest.llm ?? []).reduce((sum, usage) => sum + (usage.costUsd ?? 0), 0);
+  const transcriptDetails = manifest.transcript
+    ? [
+        `source=${manifest.transcript.source}`,
+        `format=${manifest.transcript.format}`,
+        `segments=${manifest.transcript.segmentCount}`,
+        manifest.transcript.model ? `model=${manifest.transcript.model}` : undefined,
+        manifest.transcript.seconds != null ? `seconds=${manifest.transcript.seconds.toFixed(3)}` : undefined,
+        manifest.transcript.costUsd != null ? `cost=$${manifest.transcript.costUsd.toFixed(6)}` : undefined
+      ]
+        .filter(Boolean)
+        .join("; ")
+    : "none";
   const llmDetails = (manifest.llm ?? [])
-    .map((usage) => `${usage.purpose}: ${usage.model}${usage.costUsd != null ? `, $${usage.costUsd.toFixed(6)}` : ""}`)
+    .map(
+      (usage, index) =>
+        [
+          `#${index + 1}`,
+          `provider=${usage.provider}`,
+          `purpose=${usage.purpose}`,
+          `model=${usage.model}`,
+          usage.generationId ? `generation=${usage.generationId}` : undefined,
+          usage.promptTokens != null ? `promptTokens=${usage.promptTokens}` : undefined,
+          usage.completionTokens != null ? `completionTokens=${usage.completionTokens}` : undefined,
+          usage.totalTokens != null ? `totalTokens=${usage.totalTokens}` : undefined,
+          usage.costUsd != null ? `cost=$${usage.costUsd.toFixed(6)}` : undefined
+        ]
+          .filter(Boolean)
+          .join("; ")
+    )
     .join("; ");
   return [
     "<hr>",
     "<p><strong>Podcast Proxy</strong></p>",
     "<ul>",
     `<li>Version: Ad Free</li>`,
+    `<li>Pipeline: ${escapeHtml(manifest.pipelineVersion)}</li>`,
+    `<li>Processing signature: ${escapeHtml(manifest.processingSignature)}</li>`,
+    `<li>Generated: ${escapeHtml(manifest.generatedAt)}</li>`,
+    `<li>Source URL: ${escapeHtml(manifest.sourceUrl ?? "unknown")}</li>`,
+    `<li>Source fingerprint: ${escapeHtml(manifest.sourceFingerprint)}</li>`,
     `<li>Time saved: ${escapeHtml(savedSeconds == null ? "unknown" : formatDuration(savedSeconds))}</li>`,
     `<li>RSS duration: ${escapeHtml(formatMaybeDuration(manifest.originalDurationSeconds))}</li>`,
     `<li>Source audio: ${escapeHtml(formatMaybeDuration(sourceDuration))}</li>`,
     `<li>Processed audio: ${escapeHtml(formatMaybeDuration(processedDuration))}</li>`,
-    `<li>Render mode: ${escapeHtml(manifest.audio.renderMode ?? "unknown")}${manifest.audio.bitrateKbps ? ` (${manifest.audio.bitrateKbps} kbps)` : ""}</li>`,
+    `<li>Audio status: ${escapeHtml(manifest.audio.status)}</li>`,
+    `<li>Render mode: ${escapeHtml(manifest.audio.renderMode ?? "unknown")}${manifest.audio.codec ? `; codec=${escapeHtml(manifest.audio.codec)}` : ""}${manifest.audio.bitrateKbps ? `; bitrate=${manifest.audio.bitrateKbps}kbps` : ""}</li>`,
     `<li>Removed segments: ${manifest.decisions.filter((decision) => decision.action === "remove").length}</li>`,
     `<li>Marker tones: ${manifest.audio.jingleInsertedCount}</li>`,
+    `<li>Estimated cost: $${manifest.costs.estimatedUsd.toFixed(6)}</li>`,
     `<li>Actual cost: $${manifest.costs.actualUsd.toFixed(6)}</li>`,
-    `<li>Transcript: ${escapeHtml(manifest.transcript ? `${manifest.transcript.source} (${manifest.transcript.segmentCount} segments${manifest.transcript.costUsd ? `, $${manifest.transcript.costUsd.toFixed(6)}` : ""})` : "none")}</li>`,
-    `<li>LLM: ${escapeHtml(llmDetails || "none")}${llmCost > 0 ? `; total $${llmCost.toFixed(6)}` : ""}</li>`,
+    `<li>Cost notes: ${escapeHtml(manifest.costs.notes.join(" | ") || "none")}</li>`,
+    `<li>Transcript: ${escapeHtml(transcriptDetails)}</li>`,
+    `<li>LLM calls: ${(manifest.llm ?? []).length}; ${escapeHtml(llmDetails || "none")}${llmCost > 0 ? `; LLM total $${llmCost.toFixed(6)}` : ""}</li>`,
+    `<li>Model notes: ${escapeHtml((manifest.modelNotes ?? []).join(" | ") || "none")}</li>`,
     "</ul>",
     topDecisions ? `<p><strong>Removed windows</strong></p><ul>${topDecisions}</ul>` : ""
   ].join("");
+}
+
+function formatDecisionLabel(decision: { reason: string; advertiser?: string; confidence?: number; source?: string; alignment?: { method?: string } }): string {
+  return [
+    decision.advertiser ? `${decision.advertiser}` : "unknown advertiser",
+    decision.reason,
+    decision.confidence != null ? `${Math.round(decision.confidence * 100)}%` : undefined,
+    decision.source ? `source=${decision.source}` : undefined,
+    decision.alignment?.method ? `alignment=${decision.alignment.method}` : undefined
+  ]
+    .filter(Boolean)
+    .join("; ");
 }
 
 function formatMaybeDuration(seconds: number | undefined): string {

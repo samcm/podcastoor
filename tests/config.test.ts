@@ -13,6 +13,7 @@ describe("config", () => {
     expect(config.llm.model).toBe("qwen/qwen3.6-flash");
     expect(config.transcripts.providers.openRouter.mode).toBe("audioChat");
     expect(config.transcripts.providers.openRouter.model).toBe("xiaomi/mimo-v2-omni");
+    expect(config.artwork.model).toBe("google/gemini-3.1-flash-image-preview");
     expect(config.automation.processOnStartup).toBe(true);
   });
 
