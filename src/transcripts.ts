@@ -200,6 +200,13 @@ async function acquireOpenRouterTranscript(podcast: EffectivePodcastConfig, sour
     let totalCost = 0;
     let totalSeconds = 0;
     const results = await mapWithConcurrency(chunks, Math.max(1, provider.concurrency), async (chunk) => {
+      logTranscriptProgress("openrouter transcript chunk started", {
+        mode,
+        model: provider.model,
+        chunk: chunk.index + 1,
+        chunks: chunks.length,
+        durationSeconds: Number((chunk.end - chunk.start).toFixed(3))
+      });
       const audio = (await readFile(chunk.path)).toString("base64");
       const payload =
         mode === "audioChat"
@@ -207,7 +214,9 @@ async function acquireOpenRouterTranscript(podcast: EffectivePodcastConfig, sour
               apiKey,
               model: provider.model,
               audioBase64: audio,
-              durationSeconds: chunk.end - chunk.start
+              durationSeconds: chunk.end - chunk.start,
+              chunkIndex: chunk.index + 1,
+              chunkCount: chunks.length
             })
           : await transcribeOpenRouterChunk({
               apiKey,
@@ -221,6 +230,14 @@ async function acquireOpenRouterTranscript(podcast: EffectivePodcastConfig, sour
         payload.segments?.length
           ? payload.segments
           : [{ start: 0, end: chunk.end - chunk.start, text: stripHtml(payload.text ?? "").trim() }];
+      logTranscriptProgress("openrouter transcript chunk complete", {
+        mode,
+        model: provider.model,
+        chunk: chunk.index + 1,
+        chunks: chunks.length,
+        segments: localSegments.length,
+        cost: payload.usage?.cost
+      });
       return localSegments
         .map((segment) => ({
           start: Number((chunk.start + Math.max(0, segment.start)).toFixed(3)),
@@ -307,13 +324,21 @@ async function transcribeOpenRouterAudioChatChunk(params: {
   model: string;
   audioBase64: string;
   durationSeconds: number;
+  chunkIndex: number;
+  chunkCount: number;
 }): Promise<{ text?: string; segments?: TranscriptSegment[]; usage?: { cost?: number; seconds?: number } }> {
   let lastError = "";
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120_000);
+    const timeout = setTimeout(() => controller.abort(), 90_000);
     let response: Response;
     let body = "";
+    logTranscriptProgress("openrouter audio chat attempt started", {
+      model: params.model,
+      chunk: params.chunkIndex,
+      chunks: params.chunkCount,
+      attempt: attempt + 1
+    });
     try {
       response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
@@ -358,7 +383,15 @@ async function transcribeOpenRouterAudioChatChunk(params: {
       body = await response.text();
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
-      if (attempt === 5) break;
+      logTranscriptProgress("openrouter audio chat attempt failed", {
+        level: 40,
+        model: params.model,
+        chunk: params.chunkIndex,
+        chunks: params.chunkCount,
+        attempt: attempt + 1,
+        error: lastError
+      });
+      if (attempt === 2) break;
       await delay(Math.min(30_000, 1500 * 2 ** attempt) + Math.floor(Math.random() * 500));
       continue;
     } finally {
@@ -375,7 +408,15 @@ async function transcribeOpenRouterAudioChatChunk(params: {
         const segments = parseOpenRouterAudioChatSegments(payload.choices?.[0]?.message?.content ?? "", params.durationSeconds);
         if (segments.length === 0) {
           lastError = `audio chat transcript returned no segments: ${body.slice(0, 500)}`;
-          if (attempt === 5) break;
+          logTranscriptProgress("openrouter audio chat attempt failed", {
+            level: 40,
+            model: params.model,
+            chunk: params.chunkIndex,
+            chunks: params.chunkCount,
+            attempt: attempt + 1,
+            error: "returned no transcript segments"
+          });
+          if (attempt === 2) break;
           await delay(Math.min(30_000, 1500 * 2 ** attempt) + Math.floor(Math.random() * 500));
           continue;
         }
@@ -390,13 +431,29 @@ async function transcribeOpenRouterAudioChatChunk(params: {
         };
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
-        if (attempt === 5) break;
+        logTranscriptProgress("openrouter audio chat attempt failed", {
+          level: 40,
+          model: params.model,
+          chunk: params.chunkIndex,
+          chunks: params.chunkCount,
+          attempt: attempt + 1,
+          error: lastError
+        });
+        if (attempt === 2) break;
         await delay(Math.min(30_000, 1500 * 2 ** attempt) + Math.floor(Math.random() * 500));
         continue;
       }
     }
     lastError = `${response.status} ${body}`;
-    if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt === 5) break;
+    logTranscriptProgress("openrouter audio chat attempt failed", {
+      level: 40,
+      model: params.model,
+      chunk: params.chunkIndex,
+      chunks: params.chunkCount,
+      attempt: attempt + 1,
+      error: `${response.status} ${body.slice(0, 500)}`
+    });
+    if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt === 2) break;
     const retryAfter = Number(response.headers.get("retry-after"));
     const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : Math.min(30_000, 1500 * 2 ** attempt);
     await delay(backoffMs + Math.floor(Math.random() * 500));
@@ -448,6 +505,12 @@ async function fetchOpenRouterGenerationCost(apiKey: string, generationId: strin
 function numberOrUndefined(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
+}
+
+function logTranscriptProgress(message: string, details: Record<string, unknown>): void {
+  const level = typeof details.level === "number" ? details.level : 30;
+  const { level: _level, ...rest } = details;
+  console.log(JSON.stringify({ level, time: Date.now(), scope: "transcripts", ...rest, msg: message }));
 }
 
 function extractPodcastIndexSegments(value: unknown): TranscriptSegment[] {

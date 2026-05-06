@@ -99,7 +99,7 @@ transcripts:
       enabled: true
       mode: audioChat
       model: xiaomi/mimo-v2-omni
-      chunkSeconds: 60
+      chunkSeconds: 180
 
 llm:
   provider: openrouter

@@ -45,8 +45,8 @@ transcripts:
       mode: audioChat
       model: xiaomi/mimo-v2-omni
       language: en
-      chunkSeconds: 60
-      concurrency: 2
+      chunkSeconds: 180
+      concurrency: 1
       estimatedCostPerMinuteUsd: 0.0013
     openai:
       enabled: false

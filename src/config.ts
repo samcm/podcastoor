@@ -75,8 +75,8 @@ export const defaultConfig: AppConfig = {
         mode: "audioChat",
         model: "xiaomi/mimo-v2-omni",
         language: "en",
-        chunkSeconds: 60,
-        concurrency: 2,
+        chunkSeconds: 180,
+        concurrency: 1,
         estimatedCostPerMinuteUsd: 0.0013
       },
       openai: { enabled: false, model: "gpt-4o-mini-transcribe", estimatedCostPerMinuteUsd: 0.003 }
