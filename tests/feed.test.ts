@@ -52,7 +52,7 @@ describe("feed", () => {
       transcript: { source: "test", format: "text/vtt", path: "/tmp/transcript.vtt", segmentCount: 1 },
       audio: { status: "completed", removedSeconds: 0, jingleInsertedCount: 0, bytes: 2222, durationSeconds: 3590 },
       processedDurationSeconds: 3590,
-      costs: { estimatedUsd: 0, actualUsd: 0, notes: [] },
+      costs: { estimatedUsd: 0, actualUsd: 0, llmCalls: 0, notes: [] },
       generatedAt: new Date(0).toISOString()
     };
 

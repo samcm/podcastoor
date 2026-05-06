@@ -273,6 +273,7 @@ export interface EpisodeManifest {
   costs: {
     estimatedUsd: number;
     actualUsd: number;
+    llmCalls: number;
     notes: string[];
   };
   generatedAt: string;

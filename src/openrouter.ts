@@ -5,6 +5,23 @@ interface OpenRouterJsonResult {
   usage?: LlmUsage;
 }
 
+const CLASSIFIER_WINDOW_SECONDS = 600;
+const CLASSIFIER_OVERLAP_SECONDS = 20;
+
+type ParsedClassification = {
+  adSegments?: Array<{
+    startSegment?: number;
+    endSegment?: number;
+    action?: "remove" | "keep" | "mark-only";
+    confidence?: number;
+    reason?: string;
+    startOffsetSeconds?: number;
+    endOffsetSeconds?: number;
+  }>;
+  chapters?: Array<{ segment?: number; title?: string }>;
+  notes?: string[];
+};
+
 export async function generateChaptersWithOpenRouter(podcast: EffectivePodcastConfig, transcript: Transcript): Promise<{ chapters: Chapter[]; usage?: LlmUsage }> {
   if (!podcast.llm.enabled || podcast.llm.provider !== "openrouter") return { chapters: [] };
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -45,71 +62,29 @@ export async function classifyTranscriptWithOpenRouter(
     throw new Error("OPENROUTER_API_KEY is required when llm.enabled=true and provider=openrouter");
   }
 
-  const segments = transcript.segments.map((segment, index) => ({
-    i: index,
-    start: Number(segment.start.toFixed(2)),
-    end: Number(segment.end.toFixed(2)),
-    text: segment.text.slice(0, 500)
-  }));
   const upstreamChapters = episode.chapters.map((chapter) => ({
     startTime: Number(chapter.startTime.toFixed(2)),
     title: chapter.title.slice(0, 120)
   }));
 
-  const prompt = [
-    `Podcast: ${podcast.name}`,
-    `Episode: ${episode.title}`,
-    `Episode description clues: ${episode.description.slice(0, 2500)}`,
-    `Publisher chapters, if any. Treat these as source-timeline topic references, often manually curated by the publisher: ${upstreamChapters.length ? JSON.stringify(upstreamChapters) : "none"}`,
-    `Muted topics: ${podcast.categories.muted.join(", ") || "none"}`,
-    "Task:",
-    "Identify commercial ad, sponsorship, promo, donation, merch, ticket sales, app-install, network privacy, gambling/betting, and dead-air/noise segments.",
-    "This is semantic classification. There are no keyword rules or phrase lists, but clear paid reads, product/service pitches, sponsor acknowledgements with benefits or calls to action, gambling disclaimers tied to betting reads, event ticket promos, and post-roll inserted ads should be removed.",
-    "Ad detection is the primary task. Be decisive for transcript windows that are mostly commercial, while still preserving normal editorial discussion.",
-    "Return segment index ranges plus optional boundary offsets inside the first and last segment.",
-    "Offsets are seconds from the segment start. Use them for mixed transition segments where the ad starts or ends mid-segment, so cuts do not snap to the whole chunk.",
-    "Prefer under-cutting over deleting real content. Do not remove a whole mixed segment when normal episode content clearly resumes inside it.",
-    "If a sponsor read spans adjacent segments, merge it into one range.",
-    "Use action remove for ads/noise. Use mark-only only when it is a weak clue that should not be cut.",
-    upstreamChapters.length
-      ? "Publisher chapters already exist. Use them as reference context for classification and return an empty chapters array unless the transcript reveals a clearly missing major topic."
-      : "Also create useful topic chapters by segment index when topic changes are clear. Return at most 10 chapters. Chapter titles must be 1-4 words, topic-only, and must not use prefixes like Discussion:, Segment:, Game:, or Topic:. Do not create sponsor/ad/promo chapters.",
-    "Strict JSON only with this shape:",
-    "{\"adSegments\":[{\"startSegment\":0,\"endSegment\":1,\"startOffsetSeconds\":0,\"endOffsetSeconds\":8.5,\"action\":\"remove\",\"confidence\":0.9,\"reason\":\"sponsor read\"}],\"chapters\":[{\"segment\":0,\"title\":\"Intro\"}],\"notes\":[\"...\"]}",
-    "Segments:",
-    JSON.stringify(segments)
-  ].join("\n\n");
-
   const usage: LlmUsage[] = [];
-  let result = await postOpenRouterJson(apiKey, podcast.llm.model, "ad-detection", classifierBody(prompt, podcast.llm.maxTranscriptChars));
-  if (result.usage) usage.push(result.usage);
+  const parsedWindows: ParsedClassification[] = [];
+  const windows = buildTranscriptWindows(transcript);
+  const notes: string[] = [];
 
-  let parsed = parseJsonObject(result.content || "{}") as {
-    adSegments?: Array<{
-      startSegment?: number;
-      endSegment?: number;
-      action?: "remove" | "keep" | "mark-only";
-      confidence?: number;
-      reason?: string;
-      startOffsetSeconds?: number;
-      endOffsetSeconds?: number;
-    }>;
-    chapters?: Array<{ segment?: number; title?: string }>;
-    notes?: string[];
-  };
-  if ((parsed.adSegments ?? []).length === 0 && transcript.segments.length > 20) {
-    const auditPrompt = [
-      prompt,
-      "Second-pass audit:",
-      "The first pass returned no removals for this long podcast episode. Re-check carefully for commercial ad, sponsorship, promo, donation, merch, ticket sales, app-install, network privacy, gambling/betting, and dead-air/noise segments.",
-      "Return an empty adSegments array only if the transcript genuinely contains no commercial or noisy segments."
-    ].join("\n\n");
-    result = await postOpenRouterJson(apiKey, podcast.llm.model, "ad-detection", classifierBody(auditPrompt, podcast.llm.maxTranscriptChars));
-    if (result.usage) usage.push(result.usage);
-    parsed = parseJsonObject(result.content || "{}") as typeof parsed;
+  for (const [windowIndex, windowSegments] of windows.entries()) {
+    try {
+      const prompt = buildClassifierPrompt(podcast, episode, windowSegments, upstreamChapters, windowIndex, windows.length);
+      const result = await postOpenRouterJson(apiKey, podcast.llm.model, "ad-detection", classifierBody(prompt, podcast.llm.maxTranscriptChars));
+      if (result.usage) usage.push(result.usage);
+      parsedWindows.push(parseJsonObject(result.content || "{}") as ParsedClassification);
+    } catch (error) {
+      notes.push(`Window ${windowIndex + 1}/${windows.length} classification failed: ${String(error)}`);
+    }
   }
 
-  const decisions = (parsed.adSegments ?? [])
+  const decisions = parsedWindows
+    .flatMap((parsed) => parsed.adSegments ?? [])
     .map((entry): SegmentDecision | undefined => {
       const startSegment = clampSegmentIndex(entry.startSegment ?? -1, transcript.segments.length);
       const endSegment = clampSegmentIndex(entry.endSegment ?? entry.startSegment ?? -1, transcript.segments.length);
@@ -128,7 +103,7 @@ export async function classifyTranscriptWithOpenRouter(
         confidence: Math.max(0, Math.min(1, entry.confidence ?? 0.75)),
         reason: entry.reason ?? "OpenRouter transcript segment classification",
         source: "model" as const,
-          alignment: {
+        alignment: {
           startSegmentIndex: orderedStart,
           endSegmentIndex: orderedEnd,
           method: transcript.source.startsWith("openrouter-stt") || transcript.source.startsWith("openrouter-audio-chat") || transcript.source.startsWith("openai:")
@@ -145,23 +120,82 @@ export async function classifyTranscriptWithOpenRouter(
     .filter((entry): entry is SegmentDecision => Boolean(entry));
 
   const chapters = normalizeModelChapters(
-    (parsed.chapters ?? [])
-    .map((entry): Chapter | undefined => {
-      if (entry.segment == null || !entry.title) return undefined;
-      const index = clampSegmentIndex(entry.segment, transcript.segments.length);
-      if (index < 0) return undefined;
-      return { startTime: transcript.segments[index].start, title: entry.title.slice(0, 80) };
-    })
-    .filter((entry): entry is Chapter => Boolean(entry))
+    parsedWindows
+      .flatMap((parsed) => parsed.chapters ?? [])
+      .map((entry): Chapter | undefined => {
+        if (entry.segment == null || !entry.title) return undefined;
+        const index = clampSegmentIndex(entry.segment, transcript.segments.length);
+        if (index < 0) return undefined;
+        return { startTime: transcript.segments[index].start, title: entry.title.slice(0, 80) };
+      })
+      .filter((entry): entry is Chapter => Boolean(entry))
   );
 
   return {
     decisions,
     untimedSignals: [],
-    modelNotes: parsed.notes ?? [],
+    modelNotes: [...notes, ...parsedWindows.flatMap((parsed) => parsed.notes ?? [])],
     chapters,
     llmUsage: usage
   };
+}
+
+function buildTranscriptWindows(transcript: Transcript): Array<Array<{ index: number; start: number; end: number; text: string }>> {
+  const windows: Array<Array<{ index: number; start: number; end: number; text: string }>> = [];
+  const lastEnd = transcript.segments.at(-1)?.end ?? 0;
+  for (let start = 0; start < Math.max(lastEnd, 1); start += CLASSIFIER_WINDOW_SECONDS) {
+    const end = start + CLASSIFIER_WINDOW_SECONDS + CLASSIFIER_OVERLAP_SECONDS;
+    const windowSegments = transcript.segments
+      .map((segment, index) => ({ index, start: segment.start, end: segment.end, text: segment.text }))
+      .filter((segment) => segment.end >= Math.max(0, start - CLASSIFIER_OVERLAP_SECONDS) && segment.start <= end);
+    if (windowSegments.length > 0) windows.push(windowSegments);
+  }
+  return windows.length > 0 ? windows : [transcript.segments.map((segment, index) => ({ index, start: segment.start, end: segment.end, text: segment.text }))];
+}
+
+function buildClassifierPrompt(
+  podcast: EffectivePodcastConfig,
+  episode: ParsedEpisode,
+  windowSegments: Array<{ index: number; start: number; end: number; text: string }>,
+  upstreamChapters: Array<{ startTime: number; title: string }>,
+  windowIndex: number,
+  windowCount: number
+): string {
+  const firstStart = windowSegments[0]?.start ?? 0;
+  const lastEnd = windowSegments.at(-1)?.end ?? firstStart;
+  const visibleChapters = upstreamChapters.filter((chapter) => chapter.startTime >= firstStart - 60 && chapter.startTime <= lastEnd + 60);
+  const segments = windowSegments.map((segment) => ({
+    i: segment.index,
+    start: Number(segment.start.toFixed(2)),
+    end: Number(segment.end.toFixed(2)),
+    text: segment.text.slice(0, 500)
+  }));
+
+  return [
+    `Podcast: ${podcast.name}`,
+    `Episode: ${episode.title}`,
+    `Transcript window: ${windowIndex + 1}/${windowCount}, source timeline ${firstStart.toFixed(1)}s-${lastEnd.toFixed(1)}s`,
+    `Episode description clues: ${episode.description.slice(0, 1800)}`,
+    `Publisher chapters near this window: ${visibleChapters.length ? JSON.stringify(visibleChapters) : "none"}`,
+    `Muted topics: ${podcast.categories.muted.join(", ") || "none"}`,
+    "Task:",
+    "Classify this timestamped transcript window semantically. Do not use keyword matching or phrase lists.",
+    "Remove windows that are primarily paid reads, product/service pitches, sponsor acknowledgements with commercial benefits or calls to action, donation/merch/ticket/app promotions, network privacy notices, betting/gambling commercial material, dynamically inserted ads, or dead-air/noise.",
+    "Preserve editorial discussion, jokes, news, listener messages, and normal topic transitions even when they mention brands, teams, venues, or products in a non-commercial way.",
+    "Be decisive when a contiguous run is mostly commercial. Be precise when only part of the first or last transcript segment is commercial.",
+    "Return global segment index ranges plus optional boundary offsets inside the first and last segment.",
+    "Offsets are seconds from that segment's start. Use offsets for mixed transition segments so cuts do not snap to a whole segment unnecessarily.",
+    "Prefer under-cutting over deleting real content. Do not remove a whole mixed segment when normal episode content clearly resumes inside it.",
+    "If a commercial read spans adjacent segments inside this window, merge it into one range.",
+    "Use action remove for confident ads/noise. Use mark-only only when it is a weak clue that should not be cut.",
+    upstreamChapters.length
+      ? "Publisher chapters already exist for this episode. Use them as reference context and return an empty chapters array unless this window reveals a clearly missing major topic."
+      : "Also create topic chapters when a major topic starts in this window. Return only natural topic changes. Chapter titles must be 1-4 words, topic-only, no prefixes, and no sponsor/ad/promo chapters.",
+    "Strict JSON only with this shape:",
+    "{\"adSegments\":[{\"startSegment\":0,\"endSegment\":1,\"startOffsetSeconds\":0,\"endOffsetSeconds\":8.5,\"action\":\"remove\",\"confidence\":0.9,\"reason\":\"sponsor read\"}],\"chapters\":[{\"segment\":0,\"title\":\"Intro\"}],\"notes\":[\"...\"]}",
+    "Segments:",
+    JSON.stringify(segments)
+  ].join("\n\n");
 }
 
 function classifierBody(prompt: string, maxTranscriptChars: number): Record<string, unknown> {

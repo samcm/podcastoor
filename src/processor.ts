@@ -30,7 +30,7 @@ export interface ProcessRunSummary {
 }
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
-const PIPELINE_VERSION = "v11-openrouter-audio-chat-transcripts";
+const PIPELINE_VERSION = "v12-windowed-model-detection";
 
 export async function processFeeds(options: ProcessingOptions): Promise<ProcessRunSummary> {
   const config = await loadConfig(options.configPath);
@@ -373,6 +373,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     costs: {
       estimatedUsd: cost.estimatedUsd,
       actualUsd,
+      llmCalls: llmUsage.length,
       notes: [...cost.notes, ...actualNotes]
     },
     generatedAt: new Date().toISOString()
@@ -385,6 +386,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     episodeKey: episode.key,
     estimatedUsd: cost.estimatedUsd,
     actualUsd,
+    llmCalls: llmUsage.length,
     notes: [...cost.notes, ...actualNotes]
   });
   logger.info(

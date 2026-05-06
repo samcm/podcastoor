@@ -24,7 +24,7 @@ describe("storage", () => {
       untimedSignals: [],
       chapters: [],
       audio: { status: "dry-run", removedSeconds: 0, jingleInsertedCount: 0 },
-      costs: { estimatedUsd: 0, actualUsd: 0, notes: [] },
+      costs: { estimatedUsd: 0, actualUsd: 0, llmCalls: 0, notes: [] },
       generatedAt: new Date(0).toISOString()
     };
     await writeManifest(config, manifest);

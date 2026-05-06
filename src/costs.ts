@@ -11,7 +11,8 @@ interface CostLedger {
   month: string;
   actualUsd: number;
   estimatedUsd: number;
-  runs: Array<{ at: string; podcastSlug: string; episodeKey: string; estimatedUsd: number; actualUsd: number; notes: string[] }>;
+  llmCalls: number;
+  runs: Array<{ at: string; podcastSlug: string; episodeKey: string; estimatedUsd: number; actualUsd: number; llmCalls: number; notes: string[] }>;
 }
 
 export function estimateEpisodeCost(podcast: EffectivePodcastConfig, transcript: Transcript | undefined, durationSeconds?: number): CostEstimate {
@@ -36,24 +37,45 @@ export function estimateEpisodeCost(podcast: EffectivePodcastConfig, transcript:
   }
 
   if (podcast.llm.enabled && transcript?.text) {
+    const windows = estimateClassifierWindows(transcript);
     const inputTokens = Math.ceil(Math.min(transcript.text.length, podcast.llm.maxTranscriptChars) / 4);
-    const outputTokens = 1600;
+    const outputTokens = 1600 * windows;
     const inputCost = (inputTokens / 1_000_000) * podcast.llm.estimatedInputUsdPerMillion;
     const outputCost = (outputTokens / 1_000_000) * podcast.llm.estimatedOutputUsdPerMillion;
     estimatedUsd += inputCost + outputCost;
-    notes.push(`OpenRouter estimate: ${inputTokens} input tokens + ${outputTokens} output tokens on ${podcast.llm.model}`);
+    notes.push(`OpenRouter estimate: ${inputTokens} input tokens + ${outputTokens} output tokens across ${windows} windows on ${podcast.llm.model}`);
   }
 
   return { estimatedUsd: Number(estimatedUsd.toFixed(6)), notes };
 }
 
-export async function recordCost(config: AppConfig, entry: { podcastSlug: string; episodeKey: string; estimatedUsd: number; actualUsd: number; notes: string[] }): Promise<void> {
+function estimateClassifierWindows(transcript: Transcript): number {
+  const lastEnd = transcript.segments.at(-1)?.end;
+  const durationSeconds = lastEnd && Number.isFinite(lastEnd) ? lastEnd : transcript.usage?.seconds;
+  if (!durationSeconds || durationSeconds <= 0) return 1;
+  return Math.max(1, Math.ceil(durationSeconds / 600));
+}
+
+export async function recordCost(
+  config: AppConfig,
+  entry: { podcastSlug: string; episodeKey: string; estimatedUsd: number; actualUsd: number; llmCalls: number; notes: string[] }
+): Promise<void> {
   const ledgerPath = path.join(config.storage.dataDir, "usage", "costs.json");
   const month = new Date().toISOString().slice(0, 7);
-  const current = (await readJson<CostLedger>(ledgerPath)) ?? { month, actualUsd: 0, estimatedUsd: 0, runs: [] };
-  const ledger = current.month === month ? current : { month, actualUsd: 0, estimatedUsd: 0, runs: [] };
+  const current = (await readJson<Partial<CostLedger>>(ledgerPath)) ?? { month, actualUsd: 0, estimatedUsd: 0, llmCalls: 0, runs: [] };
+  const ledger: CostLedger =
+    current.month === month
+      ? {
+          month,
+          actualUsd: current.actualUsd ?? 0,
+          estimatedUsd: current.estimatedUsd ?? 0,
+          llmCalls: current.llmCalls ?? current.runs?.reduce((sum, run) => sum + (run.llmCalls ?? 0), 0) ?? 0,
+          runs: (current.runs ?? []).map((run) => ({ ...run, llmCalls: run.llmCalls ?? 0 }))
+        }
+      : { month, actualUsd: 0, estimatedUsd: 0, llmCalls: 0, runs: [] };
   ledger.actualUsd = Number((ledger.actualUsd + entry.actualUsd).toFixed(6));
   ledger.estimatedUsd = Number((ledger.estimatedUsd + entry.estimatedUsd).toFixed(6));
+  ledger.llmCalls += entry.llmCalls;
   ledger.runs.push({ at: new Date().toISOString(), ...entry });
   await writeJson(ledgerPath, ledger);
 }
