@@ -1,0 +1,68 @@
+server:
+  host: 0.0.0.0
+  port: 3729
+  publicBaseUrl: http://localhost:3729
+storage:
+  dataDir: ./data
+processing:
+  lookbackDays: 7
+  maxEpisodesPerRun: 20
+  concurrency: 1
+  dryRun: false
+  downloadAudio: true
+  force: false
+  confidenceThreshold: 0.72
+  preserveUnknownSegments: true
+automation:
+  enabled: true
+  processOnStartup: true
+  intervalMinutes: 60
+costs:
+  monthlyBudgetUsd: 10
+  perRunBudgetUsd: 1
+  transcribeMaxMinutesPerRun: 180
+  llmMaxInputTokensPerRun: 250000
+  llmMaxOutputTokensPerRun: 20000
+audio:
+  outputBitrateKbps: 192
+  preserveSourceQuality: true
+  jingle:
+    enabled: true
+    frequencyHz: 880
+    durationSeconds: 0.35
+    gainDb: -12
+transcripts:
+  preferred: openRouter
+  providers:
+    feed:
+      enabled: true
+    pocketCasts:
+      enabled: false
+      experimental: true
+      endpointTemplate: ""
+    openRouter:
+      enabled: true
+      model: openai/whisper-large-v3-turbo
+      language: en
+      chunkSeconds: 20
+      concurrency: 2
+      estimatedCostPerMinuteUsd: 0.000667
+    openai:
+      enabled: false
+      model: gpt-4o-mini-transcribe
+      estimatedCostPerMinuteUsd: 0.003
+llm:
+  provider: openrouter
+  enabled: true
+  model: deepseek/deepseek-v4-pro
+  estimatedInputUsdPerMillion: 0.435
+  estimatedOutputUsdPerMillion: 0.87
+  maxTranscriptChars: 180000
+detection:
+  paddingSeconds: 0.6
+  minSegmentSeconds: 8
+  maxSegmentSeconds: 240
+categories:
+  preferred: []
+  muted: []
+podcasts: {}
