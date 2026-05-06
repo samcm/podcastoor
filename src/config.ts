@@ -4,6 +4,7 @@ import YAML from "yaml";
 import { z } from "zod";
 import type { AppConfig, EffectivePodcastConfig } from "./types.js";
 import { deepMerge, resolveFrom, unique } from "./utils.js";
+import { applyRuntimeOverrides } from "./runtime-overrides.js";
 
 const configSchema = z
   .object({
@@ -48,6 +49,13 @@ export const defaultConfig: AppConfig = {
     processOnStartup: true,
     intervalMinutes: 60
   },
+  retry: {
+    maxAttempts: 3,
+    retryDelayMinutes: 60
+  },
+  admin: {
+    token: process.env.PODCAST_PROXY_ADMIN_TOKEN
+  },
   costs: {
     monthlyBudgetUsd: 10,
     perRunBudgetUsd: 1,
@@ -88,6 +96,11 @@ export const defaultConfig: AppConfig = {
       openai: { enabled: false, model: "gpt-4o-mini-transcribe", estimatedCostPerMinuteUsd: 0.003 }
     }
   },
+  alignment: {
+    enabled: true,
+    provider: "segment-boundary",
+    model: "segment-boundary-v1"
+  },
   llm: {
     provider: "openrouter",
     enabled: true,
@@ -120,7 +133,7 @@ export async function loadConfig(configPath = defaultConfigPath()): Promise<AppC
   const parsed = normalizeRawConfig(YAML.parse(await readFile(absoluteConfigPath, "utf8")) as Record<string, unknown>);
   const merged = applyEnvOverrides(deepMerge(defaultConfig, parsed));
   merged.storage.dataDir = resolveFrom(configDir, merged.storage.dataDir);
-  return configSchema.parse(merged) as unknown as AppConfig;
+  return applyRuntimeOverrides(configSchema.parse(merged) as unknown as AppConfig);
 }
 
 function normalizeRawConfig(raw: Record<string, unknown>): Partial<AppConfig> {
@@ -181,17 +194,16 @@ export function resolvePodcastConfig(config: AppConfig, slug: string): Effective
   categories.preferred = unique([...(config.categories.preferred ?? []), ...((override.categories?.preferred as string[] | undefined) ?? [])]);
   categories.muted = unique([...(config.categories.muted ?? []), ...((override.categories?.muted as string[] | undefined) ?? [])]);
 
-  const processing = {
-    ...config.processing,
-    lookbackDays: override.lookbackDays ?? config.processing.lookbackDays,
-    maxEpisodesPerRun: override.maxEpisodesPerRun ?? config.processing.maxEpisodesPerRun
-  };
+  const processing = deepMerge(config.processing, override.processing ?? {});
+  processing.lookbackDays = override.lookbackDays ?? processing.lookbackDays;
+  processing.maxEpisodesPerRun = override.maxEpisodesPerRun ?? processing.maxEpisodesPerRun;
 
   return {
     ...override,
     slug,
     processing,
     detection: deepMerge(config.detection, override.detection ?? {}),
+    audio: deepMerge(config.audio, override.audio ?? {}),
     categories,
     transcripts: deepMerge(config.transcripts, override.transcripts ?? {}),
     llm: deepMerge(config.llm, override.llm ?? {})

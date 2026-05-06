@@ -15,6 +15,21 @@ import { classifyTranscriptWithOpenRouter, generateChaptersWithOpenRouter } from
 import { appendActivity } from "./activity.js";
 import { PIPELINE_VERSION } from "./pipeline.js";
 import { ensurePodcastArtwork } from "./artwork.js";
+import { alignTranscript } from "./alignment.js";
+import {
+  isFatalProviderError,
+  claimManualReprocessRequests,
+  completeManualReprocessRequests,
+  markQueueCompleted,
+  markQueueFailure,
+  markQueueRunning,
+  markQueueStage,
+  queueEntriesForManualRetry,
+  listQueueEpisodes,
+  shouldProcessQueueEpisode,
+  type ManualRunPlan,
+  type RunGuard
+} from "./queue.js";
 
 export interface ProcessRunSummary {
   processed: number;
@@ -36,6 +51,8 @@ export async function processFeeds(options: ProcessingOptions): Promise<ProcessR
   const config = await loadConfig(options.configPath);
   const slugs = options.podcastSlug ? [options.podcastSlug] : Object.keys(config.podcasts);
   const summary: ProcessRunSummary = { processed: 0, skipped: 0, failed: 0, podcasts: [] };
+  const guard: RunGuard = { providerBlocked: false };
+  const manualPlan = await claimManualReprocessRequests(config, slugs);
   await recordActivity(config, {
     level: "info",
     scope: "worker",
@@ -45,13 +62,14 @@ export async function processFeeds(options: ProcessingOptions): Promise<ProcessR
 
   for (const slug of slugs) {
     const podcast = resolvePodcastConfig(config, slug);
-    const result = await processPodcast(config, podcast, options);
+    const result = await processPodcast(config, podcast, options, guard, manualPlan);
     summary.processed += result.processed;
     summary.skipped += result.skipped;
     summary.failed += result.failed;
     summary.podcasts.push(result);
   }
 
+  await completeManualReprocessRequests(config, manualPlan.requests.map((request) => request.id));
   await recordActivity(config, {
     level: "info",
     scope: "worker",
@@ -61,7 +79,13 @@ export async function processFeeds(options: ProcessingOptions): Promise<ProcessR
   return summary;
 }
 
-async function processPodcast(config: AppConfig, podcast: EffectivePodcastConfig, options: ProcessingOptions): Promise<ProcessRunSummary["podcasts"][number]> {
+async function processPodcast(
+  config: AppConfig,
+  podcast: EffectivePodcastConfig,
+  options: ProcessingOptions,
+  guard: RunGuard,
+  manualPlan: ManualRunPlan
+): Promise<ProcessRunSummary["podcasts"][number]> {
   const dryRun = options.dryRun ?? podcast.processing.dryRun;
   logger.info({ podcast: podcast.slug, feedUrl: podcast.feedUrl }, "fetching feed");
   await recordActivity(config, {
@@ -72,8 +96,14 @@ async function processPodcast(config: AppConfig, podcast: EffectivePodcastConfig
   });
   const xml = await fetchFeed(podcast.feedUrl);
   const feed = parseFeed(xml, podcast.feedUrl);
-  const maxEpisodes = options.maxEpisodes ?? podcast.processing.maxEpisodesPerRun;
-  const eligible = feed.episodes.filter((episode) => isRecent(episode.pubDate, podcast.processing.lookbackDays)).slice(0, maxEpisodes);
+  const queueEpisodes = await listQueueEpisodes(config);
+  const manualEpisodeKeys = manualPlan.episodeKeysByPodcast.get(podcast.slug) ?? new Set<string>();
+  const retryEpisodeKeys = manualPlan.failedOnly ? queueEntriesForManualRetry(queueEpisodes, podcast.slug) : new Set<string>();
+  const lookbackDays = manualPlan.lookbackDaysFor(podcast.slug, podcast.processing.lookbackDays);
+  const maxEpisodes = manualPlan.maxEpisodesFor(podcast.slug, options.maxEpisodes ?? podcast.processing.maxEpisodesPerRun);
+  const eligible = feed.episodes
+    .filter((episode) => isRecent(episode.pubDate, lookbackDays) || manualEpisodeKeys.has(episode.key) || retryEpisodeKeys.has(episode.key))
+    .slice(0, maxEpisodes);
   logger.info({ podcast: podcast.slug, feedTitle: feed.title, discovered: feed.episodes.length, eligible: eligible.length }, "feed parsed");
   await recordActivity(config, {
     level: "info",
@@ -82,7 +112,7 @@ async function processPodcast(config: AppConfig, podcast: EffectivePodcastConfig
     message: "Feed parsed",
     details: { feedTitle: feed.title, discovered: feed.episodes.length, eligible: eligible.length }
   });
-  if (!dryRun) {
+  if (!dryRun && !options.skipArtwork) {
     try {
       const artwork = await ensurePodcastArtwork(config, podcast.slug, feed);
       if (artwork.status === "generated" || artwork.status === "exists") {
@@ -112,11 +142,32 @@ async function processPodcast(config: AppConfig, podcast: EffectivePodcastConfig
   let failed = 0;
   for (const episode of eligible) {
     try {
-      const didProcess = await processEpisode(config, podcast, episode, options);
+      const episodeOptions = { ...options, ...manualPlan.optionsFor(podcast.slug, episode.key) };
+      const queueDecision = await shouldProcessQueueEpisode(config, podcast, episode, episodeOptions, guard);
+      if (!queueDecision.process) {
+        skipped += 1;
+        logger.info({ podcast: podcast.slug, episode: episode.title, reason: queueDecision.reason }, "episode skipped by queue policy");
+        await recordActivity(config, {
+          level: "info",
+          scope: "worker",
+          podcastSlug: podcast.slug,
+          episodeKey: episode.key,
+          episodeTitle: episode.title,
+          message: "Episode skipped by queue policy",
+          details: { reason: queueDecision.reason }
+        });
+        continue;
+      }
+      const didProcess = await processEpisode(config, podcast, episode, episodeOptions);
       if (didProcess) processed += 1;
       else skipped += 1;
     } catch (error) {
       failed += 1;
+      const queueState = await markQueueFailure(config, podcast, episode, error);
+      if (isFatalProviderError(String(error))) {
+        guard.providerBlocked = true;
+        guard.providerBlockReason = String(error);
+      }
       logger.error({ podcast: podcast.slug, episode: episode.title, err: error }, "episode processing failed");
       await recordActivity(config, {
         level: "error",
@@ -125,7 +176,7 @@ async function processPodcast(config: AppConfig, podcast: EffectivePodcastConfig
         episodeKey: episode.key,
         episodeTitle: episode.title,
         message: "Episode processing failed",
-        details: { error: String(error) }
+        details: { error: String(error), queueState }
       });
     }
   }
@@ -143,7 +194,7 @@ async function processPodcast(config: AppConfig, podcast: EffectivePodcastConfig
 
 async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig, episode: ParsedEpisode, options: ProcessingOptions): Promise<boolean> {
   const dryRun = options.dryRun ?? podcast.processing.dryRun;
-  const force = options.force ?? podcast.processing.force;
+  const force = options.force === true || options.fullReprocess === true || podcast.processing.force;
   const downloadEnabled = options.downloadAudio ?? podcast.processing.downloadAudio;
   const existing = await readManifest(config, podcast.slug, episode.key);
   const targetStatus = dryRun || !downloadEnabled ? "dry-run" : "completed";
@@ -156,6 +207,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     existing.processingSignature === signature
   ) {
     logger.info({ podcast: podcast.slug, episode: episode.title, pipelineVersion: PIPELINE_VERSION }, "episode already processed");
+    await markQueueCompleted(config, podcast, episode, "already processed");
     await recordActivity(config, {
       level: "info",
       scope: "worker",
@@ -195,6 +247,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   }
 
   const paths = await ensureEpisodeDir(config, podcast.slug, episode.key);
+  await markQueueRunning(config, podcast, episode, "starting");
   logger.info({ podcast: podcast.slug, episode: episode.title, targetStatus }, "episode processing started");
   await recordActivity(config, {
     level: "info",
@@ -209,6 +262,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   const needsAudioForTranscript =
     !dryRun && (podcast.transcripts.providers.openRouter.enabled || podcast.transcripts.providers.openai.enabled) && Boolean(episode.enclosure?.url);
   if (needsAudioForTranscript && episode.enclosure?.url) {
+    await markQueueStage(config, podcast, episode, "downloading audio");
     await assertBudget(config, estimateEpisodeCost(podcast, undefined, episode.durationSeconds).estimatedUsd);
     await downloadAudio(episode.enclosure.url, paths.sourceAudio);
     sourceAudioPath = paths.sourceAudio;
@@ -224,18 +278,23 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   }
 
   const reusableTranscriptCandidate =
-    !existing || existing.sourceFingerprint === episode.sourceFingerprint ? await readJson<Transcript>(paths.transcriptJson) : undefined;
+    options.reuseTranscript !== false && !options.fullReprocess && (!existing || existing.sourceFingerprint === episode.sourceFingerprint)
+      ? await readJson<Transcript>(paths.transcriptJson)
+      : undefined;
   const reusableTranscript = isTranscriptReusable(podcast, reusableTranscriptCandidate) ? reusableTranscriptCandidate : undefined;
+  await markQueueStage(config, podcast, episode, reusableTranscript ? "reusing transcript" : "acquiring transcript");
   const transcript =
     reusableTranscript?.text || reusableTranscript?.segments.length
       ? reusableTranscript
       : await acquireTranscript(config, podcast, episode, { sourceAudioPath, dryRun });
+  const alignment = alignTranscript(config.alignment, transcript);
+  const alignedTranscript = alignment.transcript;
   logger.info(
     {
       podcast: podcast.slug,
       episode: episode.title,
-      transcriptSource: transcript?.source,
-      transcriptSegments: transcript?.segments.length ?? 0,
+      transcriptSource: alignedTranscript.source,
+      transcriptSegments: alignedTranscript.segments.length,
       transcriptReused: transcript === reusableTranscript
     },
     "transcript ready"
@@ -248,15 +307,32 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     episodeTitle: episode.title,
     message: "Transcript ready",
     details: {
-      source: transcript?.source,
-      segments: transcript?.segments.length ?? 0,
+      source: alignedTranscript.source,
+      segments: alignedTranscript.segments.length,
       reused: transcript === reusableTranscript
     }
   });
-  const detection = detectAdSegments(episode, transcript, podcast.detection);
+  if (alignment.metadata) {
+    await markQueueStage(config, podcast, episode, "aligning transcript");
+    await recordActivity(config, {
+      level: "info",
+      scope: "worker",
+      podcastSlug: podcast.slug,
+      episodeKey: episode.key,
+      episodeTitle: episode.title,
+      message: "Transcript aligned",
+      details: {
+        provider: alignment.metadata.provider,
+        model: alignment.metadata.model,
+        adjustedSegments: alignment.metadata.adjustedSegments,
+        maxAdjustmentSeconds: alignment.metadata.maxAdjustmentSeconds
+      }
+    });
+  }
+  const detection = detectAdSegments(episode, alignedTranscript, podcast.detection);
   let modelChapters: Chapter[] = [];
   const llmUsage: LlmUsage[] = [];
-  if (transcript?.segments.length && podcast.llm.enabled) {
+  if (alignedTranscript.segments.length && podcast.llm.enabled) {
     try {
       await recordActivity(config, {
         level: "info",
@@ -264,14 +340,15 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
         podcastSlug: podcast.slug,
         episodeKey: episode.key,
         episodeTitle: episode.title,
-        message: "Model detection started",
-        details: {
-          model: podcast.llm.model,
-          transcriptSegments: transcript.segments.length,
+          message: "Model detection started",
+          details: {
+            model: podcast.llm.model,
+          transcriptSegments: alignedTranscript.segments.length,
           upstreamChapters: episode.chapters.length
         }
       });
-      const modelDetection = await classifyTranscriptWithOpenRouter(podcast, episode, transcript);
+      await markQueueStage(config, podcast, episode, "model detection");
+      const modelDetection = await classifyTranscriptWithOpenRouter(podcast, episode, alignedTranscript);
       detection.decisions.push(...modelDetection.decisions);
       detection.untimedSignals.push(...modelDetection.untimedSignals);
       detection.modelNotes = [...(detection.modelNotes ?? []), ...(modelDetection.modelNotes ?? [])];
@@ -307,15 +384,16 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     }
   }
   detection.decisions = dedupeSegmentDecisions(detection.decisions);
-  const cost = estimateEpisodeCost(podcast, transcript, episode.durationSeconds);
+  await markQueueStage(config, podcast, episode, "estimating cost");
+  const cost = estimateEpisodeCost(podcast, alignedTranscript, episode.durationSeconds);
   await assertBudget(config, cost.estimatedUsd);
 
   const hasUpstreamChapters = episode.chapters.length > 0;
   const chapterResult = hasUpstreamChapters
-    ? { chapters: buildChapters(episode, transcript, podcast.categories), llmUsage: [] }
+    ? { chapters: buildChapters(episode, alignedTranscript, podcast.categories), llmUsage: [] }
     : modelChapters.length > 0
       ? { chapters: modelChapters, llmUsage: [] }
-      : await buildEpisodeChapters(podcast, episode, transcript);
+      : await buildEpisodeChapters(podcast, episode, alignedTranscript);
   if (hasUpstreamChapters) {
     detection.modelNotes = [...(detection.modelNotes ?? []), `Preserved ${episode.chapters.length} upstream chapters and remapped them after edits.`];
   }
@@ -323,7 +401,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   const baseChapters = chapterResult.chapters;
   const timelineDuration = Math.max(
     episode.durationSeconds ?? 0,
-    transcript?.segments.at(-1)?.end ?? 0,
+    alignedTranscript.segments.at(-1)?.end ?? 0,
     ...detection.decisions.map((decision) => decision.end)
   );
   const removed = normalizeSegments(removalSegments(detection.decisions, podcast.processing.confidenceThreshold), {
@@ -332,13 +410,15 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     minSegmentSeconds: podcast.detection.minSegmentSeconds,
     maxSegmentSeconds: podcast.detection.maxSegmentSeconds
   });
-  const jingleDuration = config.audio.jingle.enabled ? config.audio.jingle.durationSeconds : 0;
+  const jingleDuration = podcast.audio.jingle.enabled ? podcast.audio.jingle.durationSeconds : 0;
   const chapters = normalizeChapters(remapChapters(baseChapters, removed, jingleDuration));
   const processedDuration = durationAfterEdits(episode.durationSeconds, removed, jingleDuration);
 
-  const transcriptPath = transcript ? await writeTranscriptArtifacts(config, podcast.slug, episode.key, transcript) : undefined;
+  await markQueueStage(config, podcast, episode, "writing transcript");
+  const transcriptPath = alignedTranscript ? await writeTranscriptArtifacts(config, podcast.slug, episode.key, alignedTranscript) : undefined;
+  await markQueueStage(config, podcast, episode, "rendering audio");
   const audio = await renderEpisodeAudio({
-    config,
+    config: { ...config, audio: podcast.audio },
     podcastSlug: podcast.slug,
     episodeKey: episode.key,
     sourceUrl: episode.enclosure?.url,
@@ -360,7 +440,8 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     details: { status: audio.status, removedSeconds: audio.removedSeconds, durationSeconds: audio.durationSeconds }
   });
 
-  const actualUsd = Number(((transcript?.usage?.costUsd ?? 0) + llmUsage.reduce((sum, usage) => sum + (usage.costUsd ?? 0), 0)).toFixed(6));
+  await markQueueStage(config, podcast, episode, "writing manifest");
+  const actualUsd = Number(((alignedTranscript.usage?.costUsd ?? 0) + llmUsage.reduce((sum, usage) => sum + (usage.costUsd ?? 0), 0)).toFixed(6));
   const actualNotes = llmUsage
     .filter((usage) => usage.costUsd != null)
     .map((usage) => `OpenRouter ${usage.purpose} actual: ${usage.promptTokens ?? "?"} input tokens + ${usage.completionTokens ?? "?"} output tokens on ${usage.model} = $${usage.costUsd!.toFixed(6)}`);
@@ -382,16 +463,18 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     decisions: detection.decisions,
     untimedSignals: detection.untimedSignals,
     modelNotes: detection.modelNotes,
+    sourceChapters: normalizeChapters(episode.chapters),
     chapters,
-    transcript: transcript
+    alignment: alignment.metadata,
+    transcript: alignedTranscript
       ? {
-          source: transcript.source,
-          format: transcript.format,
+          source: alignedTranscript.source,
+          format: alignedTranscript.format,
           path: transcriptPath,
-          segmentCount: transcript.segments.length,
-          model: transcript.usage?.model,
-          seconds: transcript.usage?.seconds,
-          costUsd: transcript.usage?.costUsd
+          segmentCount: alignedTranscript.segments.length,
+          model: alignedTranscript.usage?.model,
+          seconds: alignedTranscript.usage?.seconds,
+          costUsd: alignedTranscript.usage?.costUsd
         }
       : undefined,
     llm: llmUsage,
@@ -407,6 +490,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
 
   await writeChapters(config, manifest);
   await writeManifest(config, manifest);
+  await markQueueCompleted(config, podcast, episode);
   await recordCost(config, {
     podcastSlug: podcast.slug,
     episodeKey: episode.key,
@@ -449,13 +533,14 @@ function processingSignature(config: AppConfig, podcast: EffectivePodcastConfig,
     targetStatus,
     confidenceThreshold: podcast.processing.confidenceThreshold,
     transcripts: podcast.transcripts,
+    alignment: config.alignment,
     llm: podcast.llm,
     detection: {
       paddingSeconds: podcast.detection.paddingSeconds,
       minSegmentSeconds: podcast.detection.minSegmentSeconds,
       maxSegmentSeconds: podcast.detection.maxSegmentSeconds
     },
-    audio: config.audio,
+    audio: podcast.audio,
     preserveUnknownSegments: podcast.processing.preserveUnknownSegments,
     categories: podcast.categories
   };

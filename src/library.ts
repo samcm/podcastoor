@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AppConfig, EpisodeManifest, Transcript } from "./types.js";
 import { episodePaths, readManifest } from "./storage.js";
 import { pathExists, readJson } from "./utils.js";
+import { resolvePodcastConfig } from "./config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +52,7 @@ export async function listPodcastSummaries(config: AppConfig): Promise<PodcastSu
 export async function getPodcastDeepDive(config: AppConfig, slug: string) {
   const podcast = config.podcasts[slug];
   if (!podcast) return undefined;
+  const effectivePodcast = resolvePodcastConfig(config, slug);
   const manifests = await listManifests(config, slug);
   const episodes = await Promise.all(
     manifests
@@ -65,11 +67,12 @@ export async function getPodcastDeepDive(config: AppConfig, slug: string) {
     lookbackDays: podcast.lookbackDays ?? config.processing.lookbackDays,
     config: {
       processing: config.processing,
+      effectiveProcessing: effectivePodcast.processing,
       automation: config.automation,
-      audio: config.audio,
-      detection: config.detection,
-      llm: config.llm,
-      transcripts: config.transcripts,
+      audio: effectivePodcast.audio,
+      detection: effectivePodcast.detection,
+      llm: effectivePodcast.llm,
+      transcripts: effectivePodcast.transcripts,
       costs: config.costs
     },
     episodes

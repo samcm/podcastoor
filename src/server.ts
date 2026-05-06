@@ -12,6 +12,9 @@ import { getPodcastDeepDive, listPodcastSummaries } from "./library.js";
 import { mapOriginalToProcessed, normalizeSegments, removalSegments, type Segment } from "./timeline.js";
 import { readRecentActivity, type ActivityEvent } from "./activity.js";
 import { PIPELINE_VERSION } from "./pipeline.js";
+import { enqueueManualReprocess, listQueueEpisodes, resetQueueAttempts, type ManualReprocessScope, type QueueEpisode } from "./queue.js";
+import { applyRuntimeOverridesObject, loadRuntimeOverrides, updateRuntimeTuning, type RuntimeTuning } from "./runtime-overrides.js";
+import { summarizeCosts, type CostSummary } from "./costs.js";
 
 type DeepDive = NonNullable<Awaited<ReturnType<typeof getPodcastDeepDive>>>;
 type UiEpisode = DeepDive["episodes"][number];
@@ -43,8 +46,8 @@ export function buildServer(config: AppConfig) {
 
   app.get("/", async (_request, reply) => {
     reply.type("text/html; charset=utf-8");
-    const [podcasts, activity] = await Promise.all([listPodcastSummaries(config), readRecentActivity(config, 25)]);
-    return renderPodcastList(podcasts, getAutomationState(), activity);
+    const [podcasts, activity, queue] = await Promise.all([listPodcastSummaries(config), readRecentActivity(config, 25), listQueueEpisodes(config)]);
+    return renderPodcastList(podcasts, getAutomationState(), activity, queue);
   });
 
   app.get("/podcasts/:podcastSlug", async (request, reply) => {
@@ -67,6 +70,83 @@ export function buildServer(config: AppConfig) {
     activity: await readRecentActivity(config, 100),
     automation: getAutomationState()
   }));
+
+  app.get("/costs", async (_request, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderCostDashboard(await summarizeCosts(config));
+  });
+
+  app.get("/api/costs", async () => ({
+    costs: await summarizeCosts(config)
+  }));
+
+  app.get("/api/queue", async () => ({
+    queue: await listQueueEpisodes(config),
+    automation: getAutomationState()
+  }));
+
+  app.get("/api/runtime-overrides", async () => ({
+    overrides: await loadRuntimeOverrides(config)
+  }));
+
+  app.post("/api/actions/reprocess", async (request, reply) => {
+    if (!authorizeAdmin(config, request, reply)) return reply;
+    const body = actionBody(request.body);
+    const scope = parseScope(body.scope);
+    if (!scope) {
+      reply.code(400);
+      return { error: "scope must be episode, podcast, global, or failed" };
+    }
+    if ((scope === "episode" || scope === "podcast") && !body.podcastSlug) {
+      reply.code(400);
+      return { error: "podcastSlug is required for this scope" };
+    }
+    if (scope === "episode" && !body.episodeKey) {
+      reply.code(400);
+      return { error: "episodeKey is required for episode scope" };
+    }
+    const requestEntry = await enqueueManualReprocess(config, {
+      scope,
+      podcastSlug: stringValue(body.podcastSlug),
+      episodeKey: stringValue(body.episodeKey),
+      options: {
+        force: boolValue(body.force),
+        dryRun: boolValue(body.dryRun),
+        downloadAudio: boolValue(body.downloadAudio),
+        skipArtwork: boolValue(body.skipArtwork),
+        reuseTranscript: boolValue(body.reuseTranscript),
+        fullReprocess: boolValue(body.fullReprocess),
+        lookbackDays: numberValue(body.lookbackDays),
+        maxEpisodes: numberValue(body.maxEpisodes)
+      }
+    });
+    return { ok: true, request: requestEntry };
+  });
+
+  app.post("/api/actions/reset-attempts", async (request, reply) => {
+    if (!authorizeAdmin(config, request, reply)) return reply;
+    const body = actionBody(request.body);
+    const reset = await resetQueueAttempts(config, {
+      podcastSlug: stringValue(body.podcastSlug),
+      episodeKey: stringValue(body.episodeKey),
+      allQuarantined: body.allQuarantined == null ? true : boolValue(body.allQuarantined)
+    });
+    return { ok: true, reset };
+  });
+
+  app.post("/api/runtime-overrides/tuning", async (request, reply) => {
+    if (!authorizeAdmin(config, request, reply)) return reply;
+    const body = actionBody(request.body);
+    const scope = body.scope === "podcast" ? { type: "podcast" as const, podcastSlug: stringValue(body.podcastSlug) ?? "" } : { type: "global" as const };
+    if (scope.type === "podcast" && !scope.podcastSlug) {
+      reply.code(400);
+      return { error: "podcastSlug is required for podcast tuning" };
+    }
+    const tuning = parseTuning(body);
+    const overrides = await updateRuntimeTuning(config, scope, tuning);
+    Object.assign(config, applyRuntimeOverridesObject(config, overrides));
+    return { ok: true, overrides };
+  });
 
   app.get("/api/podcasts/:podcastSlug", async (request, reply) => {
     const { podcastSlug } = request.params as { podcastSlug: string };
@@ -124,6 +204,28 @@ export function buildServer(config: AppConfig) {
     }
     reply.type("text/vtt; charset=utf-8");
     return reply.send(createReadStream(paths.transcriptVtt));
+  });
+
+  app.get("/assets/:podcastSlug/:episodeKey/transcript.json", async (request, reply) => {
+    const { podcastSlug, episodeKey } = request.params as { podcastSlug: string; episodeKey: string };
+    const paths = episodePaths(config, podcastSlug, episodeKey);
+    if (!(await pathExists(paths.transcriptJson))) {
+      reply.code(404);
+      return { error: "transcript not found" };
+    }
+    reply.type("application/json");
+    return reply.send(createReadStream(paths.transcriptJson));
+  });
+
+  app.get("/assets/:podcastSlug/:episodeKey/manifest.json", async (request, reply) => {
+    const { podcastSlug, episodeKey } = request.params as { podcastSlug: string; episodeKey: string };
+    const paths = episodePaths(config, podcastSlug, episodeKey);
+    if (!(await pathExists(paths.manifest))) {
+      reply.code(404);
+      return { error: "manifest not found" };
+    }
+    reply.type("application/json");
+    return reply.send(createReadStream(paths.manifest));
   });
 
   app.get("/assets/:podcastSlug/artwork.png", async (request, reply) => {
@@ -243,15 +345,18 @@ async function localArtworkUrl(config: AppConfig, podcastSlug: string): Promise<
 function renderPodcastList(
   podcasts: Awaited<ReturnType<typeof listPodcastSummaries>>,
   automation: ReturnType<typeof getAutomationState>,
-  activity: ActivityEvent[]
+  activity: ActivityEvent[],
+  queue: QueueEpisode[]
 ): string {
   return page(
     "Podcast Proxy",
     `<header>
       <h1>Podcast Proxy</h1>
       <p>${automation.running ? "Processing is running" : "Processing is idle"}${automation.lastFinishedAt ? ` · last finished ${renderLocalTime(automation.lastFinishedAt)}` : ""}</p>
-      <p>Autonomous mode is enabled when configured: process on startup, then repeat on the configured interval.</p>
+      <p>Autonomous mode is enabled when configured: process on startup, then repeat on the configured interval. <a href="/costs">Cost dashboard</a></p>
     </header>
+    ${renderControlPanel(podcasts)}
+    ${renderQueue(queue)}
     ${renderActivityLog(activity)}
     <main class="panel">
       <table>
@@ -272,6 +377,68 @@ function renderPodcastList(
       </table>
     </main>`
   );
+}
+
+function renderControlPanel(podcasts: Awaited<ReturnType<typeof listPodcastSummaries>>): string {
+  const podcastOptions = podcasts.map((podcast) => `<option value="${escapeHtml(podcast.slug)}">${escapeHtml(podcast.name)}</option>`).join("");
+  return `<section class="panel controls">
+    <div class="section-head"><h2>Controls</h2><span>Admin token required</span></div>
+    <form data-admin-action="reprocess">
+      <label>Scope
+        <select name="scope">
+          <option value="failed">Failed/quarantined</option>
+          <option value="global">Last N days</option>
+          <option value="podcast">Podcast</option>
+        </select>
+      </label>
+      <label>Podcast
+        <select name="podcastSlug"><option value="">All podcasts</option>${podcastOptions}</select>
+      </label>
+      <label>Lookback days <input name="lookbackDays" type="number" min="1" max="60" value="7"></label>
+      <label>Max episodes <input name="maxEpisodes" type="number" min="1" max="100" value="20"></label>
+      <label><input name="force" type="checkbox" checked> Force</label>
+      <label><input name="reuseTranscript" type="checkbox" checked> Reuse transcript</label>
+      <label><input name="skipArtwork" type="checkbox" checked> Skip artwork</label>
+      <button type="submit">Enqueue</button>
+    </form>
+    <form data-admin-action="reset-attempts">
+      <input type="hidden" name="allQuarantined" value="true">
+      <button type="submit">Reset failed/quarantined attempts</button>
+    </form>
+    <form data-admin-action="tuning">
+      <input type="hidden" name="scope" value="global">
+      <label>Confidence <input name="confidenceThreshold" type="number" min="0" max="1" step="0.01"></label>
+      <label>Cut padding <input name="paddingSeconds" type="number" min="0" max="10" step="0.1"></label>
+      <label>Min cut <input name="minSegmentSeconds" type="number" min="0" max="120" step="0.5"></label>
+      <label>Max cut <input name="maxSegmentSeconds" type="number" min="1" max="1200" step="1"></label>
+      <label><input name="markerToneEnabled" type="checkbox"> Marker tone</label>
+      <button type="submit">Save global tuning</button>
+    </form>
+  </section>`;
+}
+
+function renderQueue(queue: QueueEpisode[]): string {
+  const rows = queue.slice(0, 30).map((entry) => {
+    const lastError = entry.lastError ? `<code>${escapeHtml(entry.lastError.slice(0, 220))}</code>` : "";
+    return `<tr>
+      <td><span class="state ${escapeHtml(entry.state)}">${escapeHtml(entry.state)}</span></td>
+      <td>${escapeHtml(entry.podcastSlug)}</td>
+      <td><a href="/podcasts/${entry.podcastSlug}">${escapeHtml(entry.episodeTitle)}</a></td>
+      <td>${renderLocalTime(entry.pubDate)}</td>
+      <td>${entry.attempts}/${entry.maxAttempts}</td>
+      <td>${renderLocalTime(entry.lastAttemptAt)}</td>
+      <td>${renderLocalTime(entry.nextRetryAt)}</td>
+      <td>${escapeHtml(entry.currentStage)}</td>
+      <td>${lastError}</td>
+    </tr>`;
+  });
+  return `<section class="panel queue">
+    <div class="section-head"><h2>Processing Queue</h2><a href="/api/queue">JSON</a></div>
+    <table>
+      <thead><tr><th>State</th><th>Podcast</th><th>Episode</th><th>Published</th><th>Attempts</th><th>Last Attempt</th><th>Next Retry</th><th>Stage</th><th>Last Error</th></tr></thead>
+      <tbody>${rows.length ? rows.join("") : `<tr><td colspan="9">No queue state yet.</td></tr>`}</tbody>
+    </table>
+  </section>`;
 }
 
 function renderActivityLog(activity: ActivityEvent[]): string {
@@ -306,9 +473,14 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
       <div><span>Subscription URL</span><code>${escapeHtml(deepDive.subscriptionUrl)}</code></div>
       <div><span>Lookback</span><strong>${deepDive.lookbackDays} days</strong></div>
       <div><span>Automation</span><strong>${automation.running ? "running" : "idle"} · every ${deepDive.config.automation.intervalMinutes} min</strong></div>
+      <div><span>Confidence</span><strong>${deepDive.config.effectiveProcessing.confidenceThreshold}</strong></div>
+      <div><span>Cut Padding</span><strong>${deepDive.config.detection.paddingSeconds}s</strong></div>
+      <div><span>Cut Limits</span><strong>${deepDive.config.detection.minSegmentSeconds}s-${deepDive.config.detection.maxSegmentSeconds}s</strong></div>
+      <div><span>Marker Tone</span><strong>${deepDive.config.audio.jingle.enabled ? "enabled" : "disabled"}</strong></div>
       <div><span>Model</span><strong>${escapeHtml(deepDive.config.llm.enabled ? deepDive.config.llm.model : "disabled")}</strong></div>
       <div><span>Transcription</span><strong>${escapeHtml(transcriptionLabel(deepDive.config.transcripts))}</strong></div>
     </section>
+    ${renderPodcastControls(deepDive)}
     <main class="episodes">
       ${deepDive.episodes
         .map((episode) => {
@@ -335,8 +507,11 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
               <dt>Total Cost</dt><dd>$${episode.costs.actualUsd.toFixed(6)}</dd>
               <dt>Transcript Cost</dt><dd>$${transcriptCost.toFixed(6)}${transcriptSegments ? ` · ${transcriptSegments} segments` : ""}</dd>
               <dt>Text LLM Cost</dt><dd>$${textLlmCost.toFixed(6)} · ${(episode.llm ?? []).length} calls</dd>
+              <dt>Alignment</dt><dd>${renderAlignmentSummary(episode)}</dd>
             </dl>
+            ${renderArtifactLinks(episode)}
             ${renderAudioCompare(episode)}
+            ${renderEpisodeControls(deepDive.slug, episode)}
             ${renderTimelines(episode, deepDive.config)}
             ${renderDecisionTable(episode, deepDive.config)}
             ${episode.untimedSignals.length ? `<h3>Signals</h3><ul>${episode.untimedSignals.map((signal) => `<li>${escapeHtml(signal)}</li>`).join("")}</ul>` : ""}
@@ -349,12 +524,74 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
   );
 }
 
+function renderPodcastControls(deepDive: DeepDive): string {
+  return `<section class="panel controls">
+    <div class="section-head"><h2>${escapeHtml(deepDive.name)} Controls</h2><span>Admin token required</span></div>
+    <form data-admin-action="reprocess">
+      <input type="hidden" name="scope" value="podcast">
+      <input type="hidden" name="podcastSlug" value="${escapeHtml(deepDive.slug)}">
+      <label>Lookback days <input name="lookbackDays" type="number" min="1" max="60" value="${deepDive.lookbackDays}"></label>
+      <label>Max episodes <input name="maxEpisodes" type="number" min="1" max="100" value="${deepDive.config.effectiveProcessing.maxEpisodesPerRun}"></label>
+      <label><input name="force" type="checkbox" checked> Force</label>
+      <label><input name="reuseTranscript" type="checkbox" checked> Reuse transcript</label>
+      <label><input name="skipArtwork" type="checkbox" checked> Skip artwork</label>
+      <button type="submit">Enqueue podcast</button>
+    </form>
+    <form data-admin-action="tuning">
+      <input type="hidden" name="scope" value="podcast">
+      <input type="hidden" name="podcastSlug" value="${escapeHtml(deepDive.slug)}">
+      <label>Confidence <input name="confidenceThreshold" type="number" min="0" max="1" step="0.01" value="${deepDive.config.effectiveProcessing.confidenceThreshold}"></label>
+      <label>Cut padding <input name="paddingSeconds" type="number" min="0" max="10" step="0.1" value="${deepDive.config.detection.paddingSeconds}"></label>
+      <label>Min cut <input name="minSegmentSeconds" type="number" min="0" max="120" step="0.5" value="${deepDive.config.detection.minSegmentSeconds}"></label>
+      <label>Max cut <input name="maxSegmentSeconds" type="number" min="1" max="1200" step="1" value="${deepDive.config.detection.maxSegmentSeconds}"></label>
+      <label><input name="markerToneEnabled" type="checkbox" ${deepDive.config.audio.jingle.enabled ? "checked" : ""}> Marker tone</label>
+      <button type="submit">Save podcast tuning</button>
+    </form>
+  </section>`;
+}
+
+function renderEpisodeControls(podcastSlug: string, episode: UiEpisode): string {
+  return `<section class="inline-controls">
+    <form data-admin-action="reprocess">
+      <input type="hidden" name="scope" value="episode">
+      <input type="hidden" name="podcastSlug" value="${escapeHtml(podcastSlug)}">
+      <input type="hidden" name="episodeKey" value="${escapeHtml(episode.episodeKey)}">
+      <input type="hidden" name="force" value="true">
+      <input type="hidden" name="skipArtwork" value="true">
+      <input type="hidden" name="reuseTranscript" value="true">
+      <button type="submit">Reprocess episode</button>
+    </form>
+    <form data-admin-action="reset-attempts">
+      <input type="hidden" name="podcastSlug" value="${escapeHtml(podcastSlug)}">
+      <input type="hidden" name="episodeKey" value="${escapeHtml(episode.episodeKey)}">
+      <button type="submit">Reset attempts</button>
+    </form>
+  </section>`;
+}
+
 function renderAudioCompare(episode: UiEpisode): string {
   if (!episode.ui.sourceAudioUrl && !episode.ui.processedAudioUrl) return "";
   return `<section class="compare">
     ${episode.ui.sourceAudioUrl ? `<div><h3>Original Download</h3><audio data-role="source-audio" controls preload="none" src="${episode.ui.sourceAudioUrl}"></audio></div>` : ""}
     ${episode.ui.processedAudioUrl ? `<div><h3>Processed</h3><audio data-role="processed-audio" controls preload="none" src="${episode.ui.processedAudioUrl}"></audio></div>` : ""}
   </section>`;
+}
+
+function renderArtifactLinks(episode: UiEpisode): string {
+  const base = `/assets/${episode.podcastSlug}/${episode.episodeKey}`;
+  return `<section class="artifact-links">
+    <a href="${base}/manifest.json">manifest JSON</a>
+    <a href="${base}/transcript.json">transcript JSON</a>
+    <a href="${base}/transcript.vtt">transcript VTT</a>
+    <a href="${base}/chapters.json">chapters JSON</a>
+  </section>`;
+}
+
+function renderAlignmentSummary(episode: UiEpisode): string {
+  if (!episode.alignment) return "none";
+  return escapeHtml(
+    `${episode.alignment.provider}/${episode.alignment.model} · ${(episode.alignment.confidence * 100).toFixed(0)}% · ${episode.alignment.adjustedSegments} adjusted · max ${episode.alignment.maxAdjustmentSeconds}s`
+  );
 }
 
 function renderTimelines(episode: UiEpisode, config: DeepDiveConfig): string {
@@ -447,9 +684,10 @@ function renderDecisionTable(episode: UiEpisode, config: DeepDiveConfig): string
 }
 
 function renderChapterTable(episode: UiEpisode): string {
-  if (episode.chapters.length === 0) return "";
+  if (episode.chapters.length === 0 && !(episode.sourceChapters?.length)) return "";
   const processedDuration = episode.ui.processedDurationSeconds ?? episode.processedDurationSeconds;
   const chapters = [...episode.chapters].sort((a, b) => a.startTime - b.startTime).slice(0, 10);
+  const sourceChapters = [...(episode.sourceChapters ?? [])].sort((a, b) => a.startTime - b.startTime).slice(0, 10);
   const rows = chapters
     .map((chapter, index) => {
       const nextStart = chapters[index + 1]?.startTime ?? processedDuration;
@@ -462,12 +700,25 @@ function renderChapterTable(episode: UiEpisode): string {
       </tr>`;
     })
     .join("");
+  const sourceRows = sourceChapters
+    .map(
+      (chapter) => `<tr>
+        <td><button data-jump-source="${chapter.startTime.toFixed(3)}">${formatSeconds(chapter.startTime)}</button></td>
+        <td>${escapeHtml(chapter.title)}</td>
+      </tr>`
+    )
+    .join("");
   return `<section class="audit-table">
-    <h3>Chapters</h3>
+    <h3>Final Chapters</h3>
     <table>
       <thead><tr><th>Start</th><th>End</th><th>Duration</th><th>Topic</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
+    ${
+      sourceRows
+        ? `<details class="transcript" open><summary>Source chapters (${sourceChapters.length})</summary><table><thead><tr><th>Source Start</th><th>Publisher Topic</th></tr></thead><tbody>${sourceRows}</tbody></table></details>`
+        : ""
+    }
   </section>`;
 }
 
@@ -528,6 +779,45 @@ function renderTranscript(
   </section>`;
 }
 
+function renderCostDashboard(costs: CostSummary): string {
+  return page(
+    "Podcast Proxy Costs",
+    `<header>
+      <a href="/">Back</a>
+      <h1>Cost Dashboard</h1>
+      <p>${escapeHtml(costs.month)} · actual $${costs.actualUsd.toFixed(6)} / budget $${costs.monthlyBudgetUsd.toFixed(2)} · remaining $${costs.remainingUsd.toFixed(6)}</p>
+    </header>
+    <section class="panel meta">
+      <div><span>Estimated</span><strong>$${costs.estimatedUsd.toFixed(6)}</strong></div>
+      <div><span>Actual</span><strong>$${costs.actualUsd.toFixed(6)}</strong></div>
+      <div><span>Remaining</span><strong>$${costs.remainingUsd.toFixed(6)}</strong></div>
+      <div><span>LLM Calls</span><strong>${costs.llmCalls}</strong></div>
+    </section>
+    ${renderCostTable("By Podcast", costs.byPodcast, ["podcastSlug", "actualUsd", "estimatedUsd", "llmCalls", "episodes"])}
+    ${renderCostTable("By Day", costs.byDay, ["day", "actualUsd", "estimatedUsd", "llmCalls", "failures"])}
+    ${renderCostTable("By Model", costs.byModel, ["model", "actualUsd", "calls"])}
+    ${renderCostTable("By Stage", costs.byStage, ["stage", "actualUsd", "calls"])}
+    ${renderCostTable("Top Episodes", costs.byEpisode, ["podcastSlug", "episodeKey", "actualUsd", "estimatedUsd", "llmCalls"])}`
+  );
+}
+
+function renderCostTable<T extends Record<string, unknown>>(title: string, rows: T[], keys: Array<keyof T & string>): string {
+  const body = rows
+    .map((row) => `<tr>${keys.map((key) => `<td>${escapeHtml(formatCostCell(row[key]))}</td>`).join("")}</tr>`)
+    .join("");
+  return `<section class="panel cost-table">
+    <div class="section-head"><h2>${escapeHtml(title)}</h2></div>
+    <table>
+      <thead><tr>${keys.map((key) => `<th>${escapeHtml(key)}</th>`).join("")}</tr></thead>
+      <tbody>${body || `<tr><td colspan="${keys.length}">No data yet.</td></tr>`}</tbody>
+    </table>
+  </section>`;
+}
+
+function formatCostCell(value: unknown): string {
+  return typeof value === "number" && !Number.isInteger(value) ? `$${value.toFixed(6)}` : String(value ?? "");
+}
+
 function page(title: string, body: string): string {
   return `<!doctype html>
 <html lang="en">
@@ -553,6 +843,15 @@ function page(title: string, body: string): string {
     .meta div { display:flex; flex-direction:column; gap:4px; min-width:0; }
     .meta span, dt { color:var(--muted); font-size:12px; text-transform:uppercase; }
     code { white-space:normal; overflow-wrap:anywhere; }
+    .controls { margin:0 auto 14px; display:grid; gap:12px; }
+    .controls form, .inline-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+    .controls label { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px; text-transform:uppercase; }
+    .controls input, .controls select { min-height:30px; border:1px solid var(--line); border-radius:5px; padding:4px 7px; background:#fff; color:var(--ink); }
+    .controls label:has(input[type="checkbox"]) { flex-direction:row; align-items:center; text-transform:none; color:var(--ink); }
+    .controls button, .inline-controls button { border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--accent); padding:6px 10px; cursor:pointer; }
+    .inline-controls { margin-top:12px; }
+    .artifact-links { padding:0; margin-top:12px; display:flex; flex-wrap:wrap; gap:10px; }
+    .artifact-links a { border:1px solid var(--line); border-radius:5px; background:#fff; padding:4px 8px; }
     .episodes { display:grid; gap:14px; }
     .episode { padding:18px; }
     .episode-head { display:flex; justify-content:space-between; gap:12px; align-items:start; }
@@ -560,6 +859,15 @@ function page(title: string, body: string): string {
     dl { display:grid; grid-template-columns:130px 1fr; gap:6px 12px; margin:14px 0 0; }
     dd { margin:0; min-width:0; overflow-wrap:anywhere; }
     ul, ol { margin:0; padding-left:20px; }
+    .queue { margin:0 auto 14px; overflow-x:auto; }
+    .queue table { min-width:980px; font-size:12px; }
+    .queue code { color:var(--muted); }
+    .cost-table { margin:14px auto; overflow-x:auto; }
+    .state { display:inline-flex; border:1px solid var(--line); border-radius:999px; padding:2px 7px; color:var(--muted); background:#fff; }
+    .state.running, .state.queued { border-color:rgba(15,118,110,.35); color:#115e59; background:rgba(15,118,110,.08); }
+    .state.completed { border-color:rgba(22,163,74,.35); color:#166534; background:rgba(22,163,74,.08); }
+    .state.failed, .state.waiting-for-credits { border-color:rgba(217,119,6,.35); color:#92400e; background:rgba(245,158,11,.10); }
+    .state.quarantined { border-color:rgba(220,38,38,.35); color:#991b1b; background:rgba(220,38,38,.08); }
     .activity { margin:0 auto 14px; }
     .activity ol { display:grid; gap:8px; padding-left:0; list-style:none; margin-top:12px; }
     .activity li { display:grid; grid-template-columns:170px minmax(130px,1fr) minmax(80px,120px) minmax(120px,1.4fr); gap:8px; align-items:start; border-top:1px solid var(--line); padding-top:8px; }
@@ -628,6 +936,43 @@ function page(title: string, body: string): string {
       });
     }
 
+    function adminToken() {
+      const existing = window.localStorage.getItem("podcastoorAdminToken");
+      const token = existing || window.prompt("Admin token");
+      if (token) window.localStorage.setItem("podcastoorAdminToken", token);
+      return token;
+    }
+
+    function formPayload(form) {
+      const data = new FormData(form);
+      const payload = {};
+      for (const [key, value] of data.entries()) {
+        if (value === "") continue;
+        payload[key] = value;
+      }
+      for (const input of form.querySelectorAll("input[type='checkbox']")) {
+        if (input.name) payload[input.name] = input.checked;
+      }
+      return payload;
+    }
+
+    async function postAdminJson(url, payload) {
+      const token = adminToken();
+      if (!token) return;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-admin-token": token },
+        body: JSON.stringify(payload)
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        window.alert(text || response.statusText);
+        return;
+      }
+      window.alert("Queued");
+      window.location.reload();
+    }
+
     function jumpAudio(episode, target, seconds) {
       const audio = episode.querySelector(target === "source" ? "audio[data-role='source-audio']" : "audio[data-role='processed-audio']");
       if (!audio || !Number.isFinite(seconds)) return;
@@ -682,6 +1027,20 @@ function page(title: string, body: string): string {
       jumpAudio(episode, timeline.getAttribute("data-timeline-target"), duration / 2);
     });
 
+    document.addEventListener("submit", (event) => {
+      const form = event.target.closest?.("form[data-admin-action]");
+      if (!form) return;
+      event.preventDefault();
+      const action = form.getAttribute("data-admin-action");
+      const payload = formPayload(form);
+      const url = action === "tuning"
+        ? "/api/runtime-overrides/tuning"
+        : action === "reset-attempts"
+          ? "/api/actions/reset-attempts"
+          : "/api/actions/reprocess";
+      postAdminJson(url, payload).catch((error) => window.alert(String(error)));
+    });
+
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", formatLocalTimes, { once: true });
     } else {
@@ -712,6 +1071,72 @@ function renderLocalTime(value: string | undefined | null, mode: "activity" | "f
   const date = new Date(value);
   const datetime = Number.isNaN(date.getTime()) ? value : date.toISOString();
   return `<time datetime="${escapeHtml(datetime)}" data-local-time="${mode}">${escapeHtml(value)}</time>`;
+}
+
+function authorizeAdmin(config: AppConfig, request: FastifyRequest, reply: FastifyReply): boolean {
+  const expected = config.admin.token || process.env.PODCAST_PROXY_ADMIN_TOKEN;
+  if (!expected) {
+    reply.code(403);
+    void reply.send({ error: "admin token is not configured" });
+    return false;
+  }
+  const body = actionBody(request.body);
+  const headerToken = Array.isArray(request.headers["x-admin-token"]) ? request.headers["x-admin-token"][0] : request.headers["x-admin-token"];
+  const authorization = Array.isArray(request.headers.authorization) ? request.headers.authorization[0] : request.headers.authorization;
+  const token = headerToken || authorization?.replace(/^Bearer\s+/i, "") || body.adminToken;
+  if (String(token ?? "") !== expected) {
+    reply.code(401);
+    void reply.send({ error: "invalid admin token" });
+    return false;
+  }
+  return true;
+}
+
+function actionBody(body: unknown): Record<string, unknown> {
+  return body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+}
+
+function parseScope(value: unknown): ManualReprocessScope | undefined {
+  return value === "episode" || value === "podcast" || value === "global" || value === "failed" ? value : undefined;
+}
+
+function parseTuning(body: Record<string, unknown>): RuntimeTuning {
+  const confidenceThreshold = numberValue(body.confidenceThreshold);
+  const paddingSeconds = numberValue(body.paddingSeconds);
+  const minSegmentSeconds = numberValue(body.minSegmentSeconds);
+  const maxSegmentSeconds = numberValue(body.maxSegmentSeconds);
+  const markerToneEnabled = boolValue(body.markerToneEnabled);
+  return {
+    ...(confidenceThreshold != null ? { processing: { confidenceThreshold } } : {}),
+    ...(paddingSeconds != null || minSegmentSeconds != null || maxSegmentSeconds != null
+      ? {
+          detection: {
+            ...(paddingSeconds != null ? { paddingSeconds } : {}),
+            ...(minSegmentSeconds != null ? { minSegmentSeconds } : {}),
+            ...(maxSegmentSeconds != null ? { maxSegmentSeconds } : {})
+          }
+        }
+      : {}),
+    ...(markerToneEnabled != null ? { audio: { jingle: { enabled: markerToneEnabled } } } : {})
+  };
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (value == null || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function boolValue(value: unknown): boolean | undefined {
+  if (value == null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") return ["true", "1", "on", "yes"].includes(value.toLowerCase());
+  return undefined;
 }
 
 function timeSaved(sourceDuration: number | undefined, processedDuration: number | undefined): number | undefined {

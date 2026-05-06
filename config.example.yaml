@@ -17,6 +17,11 @@ automation:
   enabled: true
   processOnStartup: true
   intervalMinutes: 60
+retry:
+  maxAttempts: 3
+  retryDelayMinutes: 60
+admin:
+  token: ""
 costs:
   monthlyBudgetUsd: 10
   perRunBudgetUsd: 1
@@ -57,6 +62,10 @@ transcripts:
       enabled: false
       model: gpt-4o-mini-transcribe
       estimatedCostPerMinuteUsd: 0.003
+alignment:
+  enabled: true
+  provider: segment-boundary
+  model: segment-boundary-v1
 llm:
   provider: openrouter
   enabled: true

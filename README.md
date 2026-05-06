@@ -23,6 +23,9 @@ The default mode is autonomous: on server startup it fetches the configured feed
 - One-time OpenRouter/Nano Banana stamped podcast artwork generation, preserving the upstream cover and adding an `AD-FREE` stamp.
 - ffmpeg render path for cutting removal segments, preserving source MP3 audio with stream-copy where possible, and inserting a short marker tone.
 - Web deep-dive shows RSS duration, real source duration, processed duration, source/processed players, an annotated cut timeline, and collapsed timestamped transcript rows.
+- Disk-backed processing queue with attempt tracking, retry delay, quarantine after repeated failures, and admin reset controls.
+- Admin-protected manual reprocess controls and runtime tuning overrides from the web UI.
+- Cost dashboard showing spend by day, podcast, episode, model, and pipeline stage.
 
 ## Setup
 
@@ -72,6 +75,16 @@ npm run dev
 
 The server processes on startup and every `automation.intervalMinutes`.
 
+Operational controls are configured separately:
+
+```yaml
+retry:
+  maxAttempts: 3
+  retryDelayMinutes: 60
+admin:
+  token: "" # or set PODCAST_PROXY_ADMIN_TOKEN
+```
+
 Pocket Casts subscription URLs use the configured podcast slug:
 
 ```text
@@ -79,6 +92,27 @@ http://localhost:3729/feeds/example-show.xml
 ```
 
 For a phone, `localhost` means the phone itself. Use your Mac's LAN IP, Tailscale IP, or a tunnel, then set `server.publicBaseUrl` to the externally reachable base URL before generating the feed.
+
+## Web Operations
+
+The homepage exposes the operational surface:
+
+- **Processing Queue** shows queued, running, completed, failed, skipped, quarantined, and waiting-for-credits episodes.
+- **Worker Activity** shows recent processing events.
+- **Controls** can enqueue manual reprocess requests and reset failed/quarantined attempts.
+- **Cost dashboard** is linked from the homepage at `/costs`.
+
+Mutating requests require an admin token. Configure it in private deployment config or via `PODCAST_PROXY_ADMIN_TOKEN`. The public example intentionally leaves it empty.
+
+Manual controls enqueue work for the autonomous worker instead of blocking HTTP requests. Supported scopes are one episode, one podcast, last N days globally, and failed/quarantined episodes. Options include force, dry-run, skip artwork, reuse transcript, and full reprocess.
+
+Runtime tuning overrides are stored on disk, separate from deployment config:
+
+```text
+data/config/runtime-overrides.json
+```
+
+They can adjust global or per-podcast confidence threshold, cut padding, minimum/maximum cut duration, and marker tone enablement for future processing and forced reprocesses.
 
 ## Real Audio Processing
 
@@ -127,7 +161,10 @@ The text classifier is separate from transcription, so the pipeline is:
 2. OpenRouter audio-chat transcription into timestamped utterance segments.
 3. Qwen text classification over timestamped transcript windows.
 4. Model-returned absolute source timestamps mapped back to transcript segments.
-5. ffmpeg cuts and marker-tone insertion.
+5. Segment-boundary alignment pass to remove impossible transcript overlaps.
+6. ffmpeg cuts and marker-tone insertion.
+
+The current alignment provider is `segment-boundary-v1`. It stores alignment metadata in the manifest and tightens impossible segment ordering, but it is not a word-level forced aligner. The alignment abstraction is isolated so a stronger provider can replace it later.
 
 ## Transcription Providers
 
@@ -172,6 +209,10 @@ data/
           transcript.json
   activity/
     events.json
+  config/
+    runtime-overrides.json
+  queue/
+    state.json
   usage/
     costs.json
 ```
@@ -185,7 +226,7 @@ npm run build
 npm run benchmark
 ```
 
-The tests cover config merging, feed parsing and rewriting, chapter timestamp remapping, model-only detector behavior, manifest storage, transcript benchmark math, and a bounded ffmpeg audio render fixture.
+The tests cover config merging, runtime override merging, feed parsing and rewriting, chapter preservation/remapping, model-only detector behavior, queue retry/quarantine state, cost aggregation, alignment timestamp usage, manifest storage, transcript benchmark math, and a bounded ffmpeg audio render fixture.
 
 ## Operating Notes
 
@@ -193,4 +234,7 @@ The tests cover config merging, feed parsing and rewriting, chapter timestamp re
 - Raise `processing.maxEpisodesPerRun` slowly.
 - Keep `costs.perRunBudgetUsd` low until transcript/model behavior is measured.
 - The homepage shows the latest worker activity from `data/activity/events.json`.
+- The queue state is persisted in `data/queue/state.json`; failed episodes retry until `retry.maxAttempts`, then move to quarantine.
+- Use the UI reset control to reset one episode, one podcast, or all failed/quarantined attempts so they retry on the next worker loop.
+- Credit/auth failures mark the active episode as waiting-for-credits and stop additional provider calls for the rest of that processing run.
 - Dynamic ads are currently handled when they appear in the downloaded audio/transcript and the model classifies the window. Multi-region audio diffing is a future improvement.

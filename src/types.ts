@@ -19,6 +19,15 @@ export interface ProcessingConfig {
   preserveUnknownSegments: boolean;
 }
 
+export interface RetryConfig {
+  maxAttempts: number;
+  retryDelayMinutes: number;
+}
+
+export interface AdminConfig {
+  token?: string;
+}
+
 export interface AutomationConfig {
   enabled: boolean;
   processOnStartup: boolean;
@@ -79,6 +88,12 @@ export interface TranscriptProviderConfig {
   };
 }
 
+export interface AlignmentConfig {
+  enabled: boolean;
+  provider: "segment-boundary" | "none";
+  model: string;
+}
+
 export interface LlmConfig {
   provider: "openrouter" | "none";
   enabled: boolean;
@@ -115,7 +130,9 @@ export interface PodcastOverride {
   feedUrl: string;
   lookbackDays?: number;
   maxEpisodesPerRun?: number;
+  processing?: Partial<ProcessingConfig>;
   detection?: Partial<DetectionConfig>;
+  audio?: Partial<AudioConfig>;
   categories?: Partial<CategoryConfig>;
   transcripts?: Partial<TranscriptProviderConfig>;
   llm?: Partial<LlmConfig>;
@@ -126,10 +143,13 @@ export interface AppConfig {
   storage: StorageConfig;
   processing: ProcessingConfig;
   automation: AutomationConfig;
+  retry: RetryConfig;
+  admin: AdminConfig;
   costs: CostConfig;
   audio: AudioConfig;
   artwork: ArtworkConfig;
   transcripts: TranscriptProviderConfig;
+  alignment: AlignmentConfig;
   llm: LlmConfig;
   detection: DetectionConfig;
   categories: CategoryConfig;
@@ -140,6 +160,7 @@ export interface EffectivePodcastConfig extends PodcastOverride {
   slug: string;
   processing: ProcessingConfig;
   detection: DetectionConfig;
+  audio: AudioConfig;
   categories: CategoryConfig;
   transcripts: TranscriptProviderConfig;
   llm: LlmConfig;
@@ -268,7 +289,17 @@ export interface EpisodeManifest {
   decisions: SegmentDecision[];
   untimedSignals: string[];
   modelNotes?: string[];
+  sourceChapters?: Chapter[];
   chapters: Chapter[];
+  alignment?: {
+    provider: string;
+    model: string;
+    confidence: number;
+    adjustedSegments: number;
+    averageAdjustmentSeconds: number;
+    maxAdjustmentSeconds: number;
+    notes: string[];
+  };
   transcript?: {
     source: string;
     format: string;
@@ -295,5 +326,9 @@ export interface ProcessingOptions {
   force?: boolean;
   downloadAudio?: boolean;
   podcastSlug?: string;
+  episodeKey?: string;
   maxEpisodes?: number;
+  skipArtwork?: boolean;
+  reuseTranscript?: boolean;
+  fullReprocess?: boolean;
 }

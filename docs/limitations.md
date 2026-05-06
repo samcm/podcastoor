@@ -10,6 +10,7 @@
 - It can rewrite completed feed items to local audio, chapter, and transcript asset URLs.
 - It has a real ffmpeg render path with optional marker tone insertion.
 - It has a transcript benchmark path for comparing reference and candidate transcripts.
+- It has persisted queue state, retry/quarantine policy, admin reset controls, runtime tuning overrides, and a cost dashboard.
 
 ## Intentional Boundaries
 
@@ -23,10 +24,10 @@ Pocket Casts generated transcripts are not used by default. There is no public P
 
 - Dynamic ad removal depends on ASR/model detection after the inserted audio appears in the downloaded file. There is not yet an audio-fingerprint diff across multiple regional downloads.
 - No diarization-aware classification yet.
-- Current OpenRouter audio-chat alignment uses model-estimated utterance timestamps, not provider word timestamps. The next precision upgrade should add provider word timestamps or forced alignment, preferably Qwen3-ASR/Qwen3-ForcedAligner, Mistral Voxtral Mini Transcribe V2, Deepgram Nova-3, ElevenLabs Scribe v2, or Groq direct STT.
-- Web UI is read-only: it shows source/processed audio, clickable cut annotations, and removed transcript rows, but does not yet save manual edits.
+- Current alignment is a segment-boundary pass over utterance timestamps, not provider word timestamps. The next precision upgrade should add provider word timestamps or forced alignment, preferably Qwen3-ASR/Qwen3-ForcedAligner, Mistral Voxtral Mini Transcribe V2, Deepgram Nova-3, ElevenLabs Scribe v2, or Groq direct STT.
+- Web UI can enqueue reprocess/reset/tuning actions, but does not yet save manual segment edits.
 - No purge/retention policy, by design for this spike.
-- No queue persistence beyond manifests.
+- Queue state is persisted, but there is still no multi-worker locking beyond the single intended worker deployment.
 - No multi-worker processing.
 - No authentication on served feeds/assets.
 - RSS rewrite is conservative and only changes completed processed episodes.
