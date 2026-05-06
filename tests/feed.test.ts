@@ -25,6 +25,14 @@ const xml = `<?xml version="1.0" encoding="utf-8"?>
         <psc:chapter start="00:10:00" title="Main Topic" />
       </psc:chapters>
     </item>
+    <item>
+      <title>Unprocessed Episode</title>
+      <description>Should not appear until processed.</description>
+      <guid isPermaLink="false">episode-2</guid>
+      <pubDate>Wed, 06 May 2026 01:00:00 GMT</pubDate>
+      <itunes:duration>30:00</itunes:duration>
+      <enclosure url="https://cdn.example.com/unprocessed.mp3" length="5678" type="audio/mpeg"/>
+    </item>
   </channel>
 </rss>`;
 
@@ -73,5 +81,39 @@ describe("feed", () => {
     expect(rewritten).toContain("Time saved");
     expect(rewritten).toContain("59:50");
     expect(rewritten).toContain("application/json+chapters");
+    expect(rewritten).not.toContain("Unprocessed Episode");
+    expect(rewritten).not.toContain("https://cdn.example.com/unprocessed.mp3");
+  });
+
+  it("omits stale manifests until the current enclosure is processed", () => {
+    const parsed = parseFeed(xml, "https://feeds.example.com/show.xml");
+    const manifest: EpisodeManifest = {
+      schemaVersion: 1,
+      pipelineVersion: "test",
+      processingSignature: "signature",
+      podcastSlug: "sample",
+      podcastName: "Sample Show",
+      episodeKey: parsed.episodes[0].key,
+      title: "Sample Episode",
+      guid: "episode-1",
+      sourceUrl: "https://cdn.example.com/episode.mp3",
+      sourceFingerprint: "old-source",
+      decisions: [],
+      untimedSignals: [],
+      chapters: [],
+      audio: { status: "completed", removedSeconds: 0, jingleInsertedCount: 0, bytes: 2222, durationSeconds: 3590 },
+      processedDurationSeconds: 3590,
+      costs: { estimatedUsd: 0, actualUsd: 0, llmCalls: 0, notes: [] },
+      generatedAt: new Date(0).toISOString()
+    };
+
+    const rewritten = rewriteFeed(parsed, {
+      publicBaseUrl: "http://localhost:3729",
+      podcastSlug: "sample",
+      manifests: new Map([[parsed.episodes[0].key, manifest]])
+    });
+
+    expect(rewritten).not.toContain("Sample Episode");
+    expect(rewritten).not.toContain("https://cdn.example.com/episode.mp3");
   });
 });

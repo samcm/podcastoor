@@ -134,16 +134,22 @@ export function rewriteFeed(parsed: ParsedFeed, options: { publicBaseUrl: string
   rewriteImageTitle(channel, adFreeChannelTitle);
   rewriteSelfLink(channel, proxyFeedUrl);
 
-  const items = asArray(channel.item).map((rawItem, index) => {
-    const episode = parsed.episodes[index];
-    if (!episode) return rawItem;
-    const manifest = options.manifests.get(episode.key);
-    if (!manifest || manifest.audio.status !== "completed") return rawItem;
-    return rewriteEpisodeItem(getRecord(rawItem), episode.key, options, manifest);
-  });
+  const items = asArray(channel.item)
+    .map((rawItem, index) => {
+      const episode = parsed.episodes[index];
+      if (!episode) return undefined;
+      const manifest = options.manifests.get(episode.key);
+      if (!isPublishableManifest(episode, manifest)) return undefined;
+      return rewriteEpisodeItem(getRecord(rawItem), episode.key, options, manifest);
+    })
+    .filter((item): item is Record<string, unknown> => Boolean(item));
   channel.item = items;
 
   return `<?xml version="1.0" encoding="UTF-8"?>\n${builder.build(doc)}\n`;
+}
+
+function isPublishableManifest(episode: ParsedEpisode, manifest: EpisodeManifest | undefined): manifest is EpisodeManifest {
+  return Boolean(manifest && manifest.audio.status === "completed" && manifest.sourceFingerprint === episode.sourceFingerprint);
 }
 
 function rewriteSelfLink(channel: Record<string, unknown>, href: string): void {
