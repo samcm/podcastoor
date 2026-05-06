@@ -1,0 +1,125 @@
+server:
+  host: 0.0.0.0
+  port: 3729
+  publicBaseUrl: http://192.168.1.98:3729
+storage:
+  dataDir: ./data
+processing:
+  lookbackDays: 7
+  maxEpisodesPerRun: 20
+  concurrency: 1
+  dryRun: false
+  downloadAudio: true
+  force: false
+  confidenceThreshold: 0.72
+  preserveUnknownSegments: true
+automation:
+  enabled: true
+  processOnStartup: true
+  intervalMinutes: 60
+costs:
+  monthlyBudgetUsd: 10
+  perRunBudgetUsd: 1
+  transcribeMaxMinutesPerRun: 180
+  llmMaxInputTokensPerRun: 250000
+  llmMaxOutputTokensPerRun: 20000
+audio:
+  outputBitrateKbps: 192
+  preserveSourceQuality: true
+  jingle:
+    enabled: true
+    frequencyHz: 880
+    durationSeconds: 0.35
+    gainDb: -12
+transcripts:
+  preferred: openRouter
+  providers:
+    feed:
+      enabled: true
+    pocketCasts:
+      enabled: false
+      experimental: true
+      endpointTemplate: ""
+    openRouter:
+      enabled: true
+      model: openai/whisper-large-v3-turbo
+      language: en
+      chunkSeconds: 10
+      concurrency: 2
+      estimatedCostPerMinuteUsd: 0.000667
+    openai:
+      enabled: false
+      model: gpt-4o-mini-transcribe
+      estimatedCostPerMinuteUsd: 0.003
+llm:
+  provider: openrouter
+  enabled: true
+  model: deepseek/deepseek-v4-pro
+  estimatedInputUsdPerMillion: 0.435
+  estimatedOutputUsdPerMillion: 0.87
+  maxTranscriptChars: 180000
+detection:
+  paddingSeconds: 0.6
+  minSegmentSeconds: 8
+  maxSegmentSeconds: 240
+  adKeywords:
+    - sponsored by
+    - this episode is brought to you by
+    - use code
+    - promo code
+    - discount code
+    - free trial
+    - exclusive offer
+    - terms and conditions
+    - gamble responsibly
+    - support is available
+    - omnystudio.com/listener
+  dynamicAdMarkerPhrases:
+    - advertisement
+    - ad break
+categories:
+  preferred:
+    - NRL
+    - cricket
+    - football
+  muted:
+    - AFL
+podcasts:
+  hello-sport:
+    name: Hello Sport
+    feedUrl: https://feeds.acast.com/public/shows/64e7e1ab41e6ea0011d91292
+    lookbackDays: 7
+    detection:
+      adKeywords:
+        - whatever you bet on
+        - gamble responsibly
+        - terms and conditions
+  the-grade-cricketer:
+    name: The Grade Cricketer
+    feedUrl: https://www.omnycontent.com/d/playlist/d3d56d8d-11c9-411a-aade-af8f001be4a7/f9ddc13f-8a37-4937-81c7-b081006fa5c2/ebea9171-5a2f-4a13-96e0-b081006fa5e8/podcast.rss
+    lookbackDays: 7
+    categories:
+      preferred:
+        - cricket
+      muted: []
+    detection:
+      adKeywords:
+        - exclusive deal
+        - discount code
+        - patreon.com/gradecricketer
+  the-circus:
+    name: The Circus
+    feedUrl: https://www.omnycontent.com/d/playlist/d3d56d8d-11c9-411a-aade-af8f001be4a7/c9a7f153-6260-4061-8790-b26f00326168/873eadca-9160-47e8-9c6f-b26f0032653a/podcast.rss
+    lookbackDays: 7
+    categories:
+      preferred:
+        - NRL
+        - football
+        - rugby
+      muted:
+        - AFL
+    detection:
+      adKeywords:
+        - exclusive deal
+        - discount code
+        - use code

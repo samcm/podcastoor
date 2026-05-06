@@ -1,88 +1,29 @@
-# Build stage
-FROM node:18-alpine AS builder
+FROM node:22-bookworm-slim AS deps
 
-# Install build dependencies for native modules
-RUN apk add --no-cache \
-    python3 \
-    make \
-    g++ \
-    sqlite-dev
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
 
-# Install pnpm
-RUN npm install -g pnpm
+FROM deps AS build
 
-# Set working directory
+COPY tsconfig.json ./
+COPY src ./src
+COPY tests ./tests
+RUN npm run build
+RUN npm prune --omit=dev
+
+FROM node:22-bookworm-slim AS runtime
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV NODE_ENV=production
 WORKDIR /app
 
-# Copy package files
-COPY package.json pnpm-workspace.yaml ./
-COPY packages/shared/package.json ./packages/shared/
-COPY packages/processor/package.json ./packages/processor/
-COPY packages/web/package.json ./packages/web/
+COPY --from=build /app/package.json /app/package-lock.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
 
-# Install dependencies (no lockfile since we're updating deps)
-RUN pnpm install
-
-# Copy all source code
-COPY packages/shared ./packages/shared
-COPY packages/processor ./packages/processor
-COPY packages/web ./packages/web
-COPY turbo.json ./
-
-# Build everything using turbo (handles dependencies)
-RUN pnpm build
-
-# Production stage
-FROM node:18-alpine AS runtime
-
-# Install necessary packages for audio processing
-RUN apk add --no-cache \
-    ffmpeg \
-    curl \
-    sqlite
-
-# Install pnpm
-RUN npm install -g pnpm
-
-# Create app user
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S podcastoor -u 1001
-
-# Set working directory
-WORKDIR /app
-
-# Copy package files
-COPY package.json pnpm-workspace.yaml ./
-COPY packages/shared/package.json ./packages/shared/
-COPY packages/processor/package.json ./packages/processor/
-COPY packages/web/package.json ./packages/web/
-
-# Install only production dependencies
-RUN pnpm install --prod
-
-# Copy built application
-COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
-COPY --from=builder /app/packages/processor/dist ./packages/processor/dist
-COPY --from=builder /app/packages/web/dist ./packages/web/dist
-# Also copy the database schema file
-COPY --from=builder /app/packages/processor/src/database/schema.sql ./packages/processor/dist/database/
-
-# Create necessary directories
-RUN mkdir -p /app/data /app/tmp /app/config && \
-    chown -R podcastoor:nodejs /app
-
-# Note: You MUST mount a config file at runtime:
-# docker run -v ./config:/app/config:ro ...
-
-# Switch to non-root user
-USER podcastoor
-
-# Expose port
-EXPOSE 3000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
-
-# Start the application
-CMD ["node", "packages/processor/dist/index.js"]
+EXPOSE 3729
+CMD ["node", "dist/src/cli.js", "--config", "/config/config.yaml", "server"]

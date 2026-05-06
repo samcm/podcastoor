@@ -1,32 +1,36 @@
 {
   "name": "podcastoor",
+  "version": "0.1.0",
   "private": true,
-  "workspaces": ["packages/*"],
+  "type": "module",
+  "description": "A conservative V1 podcast RSS proxy that prepares ad-filtered audio, transcripts, and chapters for podcast clients.",
   "scripts": {
-    "build": "turbo run build",
-    "test": "turbo run test",
-    "dev": "turbo run dev --parallel",
-    "lint": "turbo run lint",
-    "typecheck": "turbo run typecheck",
-    "dev:local": "./scripts/dev.sh",
-    "dev:web": "./scripts/dev-web.sh",
-    "dev:docker": "./scripts/dev-with-docker.sh",
-    "setup": "make setup",
-    "docker:start": "make start",
-    "docker:stop": "make stop",
-    "docker:build": "make build",
-    "docker:check": "make check",
-    "docker:logs": "make logs",
-    "docker:reset": "make reset"
-  },
-  "devDependencies": {
-    "turbo": "^2.0.0",
-    "typescript": "^5.0.0",
-    "@types/node": "^22.0.0"
+    "dev": "tsx src/cli.ts server",
+    "server": "node dist/src/cli.js server",
+    "bootstrap": "tsx src/cli.ts bootstrap",
+    "process": "tsx src/cli.ts process",
+    "dry-run": "tsx src/cli.ts process --dry-run",
+    "benchmark": "tsx src/cli.ts benchmark",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "normalize": "tsx src/cli.ts normalize"
   },
   "engines": {
-    "node": ">=18",
-    "pnpm": ">=8"
+    "node": ">=22"
   },
-  "packageManager": "pnpm@8.15.0"
+  "dependencies": {
+    "commander": "^13.1.0",
+    "fast-xml-parser": "^5.7.3",
+    "fastify": "^5.2.1",
+    "pino": "^9.6.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  }
 }

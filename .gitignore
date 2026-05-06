@@ -1,50 +1,7 @@
-# Dependencies
 node_modules/
-.pnpm-store/
-
-# Build outputs
 dist/
-build/
-.turbo/
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-pnpm-debug.log*
-
-# Runtime data
-pids/
-*.pid
-*.seed
-*.pid.lock
-
-# Coverage
-coverage/
-.nyc_output/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Temporary files
+data/
 tmp/
-temp/
-*.tmp
-
-# Config files
-config/*.yaml
-!config/*.example.yaml
-
-data
+.env
+.DS_Store
+*.log
