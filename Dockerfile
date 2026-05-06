@@ -24,6 +24,7 @@ WORKDIR /app
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY config.example.yaml ./
 
-EXPOSE 3729
-CMD ["node", "dist/src/cli.js", "--config", "/config/config.yaml", "server"]
+EXPOSE 3000 3729
+CMD ["node", "dist/src/cli.js", "server"]

@@ -201,7 +201,6 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
               <dt>Decisions</dt><dd>${episode.decisions.length}</dd>
               <dt>Untimed Signals</dt><dd>${episode.untimedSignals.length}</dd>
               <dt>Chapters</dt><dd>${episode.chapters.length}</dd>
-              <dt>Estimated Cost</dt><dd>$${episode.costs.estimatedUsd.toFixed(6)}</dd>
               <dt>Actual Cost</dt><dd>$${episode.costs.actualUsd.toFixed(6)}</dd>
               <dt>LLM Calls</dt><dd>${episode.llm?.length ?? 0}</dd>
             </dl>

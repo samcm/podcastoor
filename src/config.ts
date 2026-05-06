@@ -113,13 +113,67 @@ export const defaultConfig: AppConfig = {
   podcasts: {}
 };
 
-export async function loadConfig(configPath = "config.example.yaml"): Promise<AppConfig> {
+export function defaultConfigPath(): string {
+  const configPath = process.env.CONFIG_PATH;
+  const configFile = process.env.CONFIG_FILE ?? "config.yaml";
+  return configPath ? path.join(configPath, configFile) : "config.example.yaml";
+}
+
+export async function loadConfig(configPath = defaultConfigPath()): Promise<AppConfig> {
   const absoluteConfigPath = path.resolve(configPath);
   const configDir = path.dirname(absoluteConfigPath);
-  const parsed = YAML.parse(await readFile(absoluteConfigPath, "utf8")) as Partial<AppConfig>;
-  const merged = deepMerge(defaultConfig, parsed);
+  const parsed = normalizeRawConfig(YAML.parse(await readFile(absoluteConfigPath, "utf8")) as Record<string, unknown>);
+  const merged = applyEnvOverrides(deepMerge(defaultConfig, parsed));
   merged.storage.dataDir = resolveFrom(configDir, merged.storage.dataDir);
   return configSchema.parse(merged) as unknown as AppConfig;
+}
+
+function normalizeRawConfig(raw: Record<string, unknown>): Partial<AppConfig> {
+  if (!Array.isArray(raw.podcasts)) return raw as Partial<AppConfig>;
+
+  const podcasts: AppConfig["podcasts"] = {};
+  for (const podcast of raw.podcasts) {
+    if (!podcast || typeof podcast !== "object") continue;
+    const entry = podcast as Record<string, unknown>;
+    if (entry.enabled === false) continue;
+    const slug = String(entry.id ?? entry.slug ?? entry.name ?? "").trim();
+    const feedUrl = String(entry.rssUrl ?? entry.feedUrl ?? "").trim();
+    const name = String(entry.name ?? slug).trim();
+    if (!slug || !feedUrl || !name) continue;
+    podcasts[slug] = {
+      name,
+      feedUrl,
+      lookbackDays: typeof entry.retentionDays === "number" ? entry.retentionDays : undefined
+    };
+  }
+
+  return {
+    server: {
+      host: "0.0.0.0",
+      port: Number(process.env.PORT ?? 3000),
+      publicBaseUrl: String(raw.publicUrl ?? process.env.PUBLIC_URL ?? "http://localhost:3000")
+    },
+    storage: {
+      dataDir: String(raw.dataDir ?? process.env.STORAGE_BASE_DIR ?? "./data")
+    },
+    podcasts
+  } as Partial<AppConfig>;
+}
+
+function applyEnvOverrides(config: AppConfig): AppConfig {
+  const port = process.env.PORT ? Number(process.env.PORT) : undefined;
+  return {
+    ...config,
+    server: {
+      ...config.server,
+      port: Number.isFinite(port) && port ? port : config.server.port,
+      publicBaseUrl: process.env.PUBLIC_URL || config.server.publicBaseUrl
+    },
+    storage: {
+      ...config.storage,
+      dataDir: process.env.STORAGE_BASE_DIR || process.env.DATA_DIR || config.storage.dataDir
+    }
+  };
 }
 
 export function resolvePodcastConfig(config: AppConfig, slug: string): EffectivePodcastConfig {

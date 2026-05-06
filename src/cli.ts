@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { Command } from "commander";
-import { loadConfig } from "./config.js";
+import { defaultConfigPath, loadConfig } from "./config.js";
 import { processFeeds } from "./processor.js";
 import { startServer } from "./server.js";
 import { benchmarkTranscripts, runSampleBenchmark } from "./benchmark.js";
@@ -13,7 +13,7 @@ const program = new Command();
 program
   .name("podcast-proxy-v1")
   .description("RSS podcast proxy for conservative ad filtering, transcripts, and chapters.")
-  .option("-c, --config <path>", "config file", "config.example.yaml");
+  .option("-c, --config <path>", "config file", defaultConfigPath());
 
 program
   .command("bootstrap")

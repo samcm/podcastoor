@@ -231,7 +231,6 @@ function buildProxyMetadataBlock(manifest: EpisodeManifest): string {
     `<li>Render mode: ${escapeHtml(manifest.audio.renderMode ?? "unknown")}${manifest.audio.bitrateKbps ? ` (${manifest.audio.bitrateKbps} kbps)` : ""}</li>`,
     `<li>Removed segments: ${manifest.decisions.filter((decision) => decision.action === "remove").length}</li>`,
     `<li>Marker tones: ${manifest.audio.jingleInsertedCount}</li>`,
-    `<li>Estimated cost: $${manifest.costs.estimatedUsd.toFixed(6)}</li>`,
     `<li>Actual cost: $${manifest.costs.actualUsd.toFixed(6)}</li>`,
     `<li>Transcript: ${escapeHtml(manifest.transcript ? `${manifest.transcript.source} (${manifest.transcript.segmentCount} segments${manifest.transcript.costUsd ? `, $${manifest.transcript.costUsd.toFixed(6)}` : ""})` : "none")}</li>`,
     `<li>LLM: ${escapeHtml(llmDetails || "none")}${llmCost > 0 ? `; total $${llmCost.toFixed(6)}` : ""}</li>`,
