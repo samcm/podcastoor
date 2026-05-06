@@ -23,7 +23,7 @@ Pocket Casts generated transcripts are not used by default. There is no public P
 
 - Dynamic ad removal depends on ASR/model detection after the inserted audio appears in the downloaded file. There is not yet an audio-fingerprint diff across multiple regional downloads.
 - No diarization-aware classification yet.
-- Current OpenRouter STT alignment is chunk-based, not word-based. The next precision upgrade should add a provider with word timestamps.
+- Current OpenRouter STT alignment is chunk-based, not word-based. The next precision upgrade should add provider word timestamps or forced alignment, preferably Qwen3-ASR/Qwen3-ForcedAligner, Mistral Voxtral Mini Transcribe V2, Deepgram Nova-3, ElevenLabs Scribe v2, or Groq direct STT.
 - Web UI is read-only: it shows source/processed audio, clickable cut annotations, and removed transcript rows, but does not yet save manual edits.
 - No purge/retention policy, by design for this spike.
 - No queue persistence beyond manifests.
@@ -39,7 +39,7 @@ Pocket Casts generated transcripts are not used by default. There is no public P
    - re-render one episode.
 
 2. Add a transcript pipeline:
-   - Groq direct or another word-timestamp provider,
+   - Qwen3-ASR/Qwen3-ForcedAligner or another word-timestamp provider,
    - boundary snapping to word/silence timestamps,
    - transcript cache keyed by audio fingerprint,
    - WER comparison against feed or Pocket Casts reference transcripts when available.

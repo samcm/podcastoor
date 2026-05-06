@@ -46,9 +46,17 @@ Source: [OpenAI API pricing](https://platform.openai.com/docs/pricing/). OpenAI'
 
 OpenAI's transcription API supports `timestamp_granularities` with `word` and `segment` when `response_format` is `verbose_json`, though the diarization model has separate response constraints. Source: [OpenAI create transcription API reference](https://platform.openai.com/docs/api-reference/audio/createTranscription).
 
+OpenRouter's dedicated STT endpoint accepts base64 audio and returns `text` plus `usage`. The current API reference does not document `words` or `segments` in the response, and the project bake-off did not receive native timestamp arrays from OpenRouter STT models. Source: [OpenRouter create transcription API reference](https://openrouter.ai/docs/api/api-reference/stt/create-audio-transcriptions).
+
+OpenRouter also supports audio input through chat completions for compatible multimodal models using `input_audio`. This can be used for transcription or audio reasoning, but it is a chat/audio-understanding path rather than a forced-alignment API. Source: [OpenRouter audio guide](https://openrouter.ai/docs/guides/overview/multimodal/audio).
+
+Google's Gemini API can analyze audio, produce transcriptions, and provide timestamps when prompted, but Google explicitly positions the Gemini API as audio understanding and points to Google Cloud Speech-to-Text for dedicated real-time STT. Source: [Gemini audio understanding](https://ai.google.dev/gemini-api/docs/audio).
+
 Mistral's Voxtral Mini Transcribe V2 is a newer non-Whisper batch STT model with diarization, context biasing, word-level timestamps, and multilingual support. Mistral lists it at `$0.003/min` and claims about 4% WER on FLEURS plus better price/performance than GPT-4o mini Transcribe, Gemini 2.5 Flash, Assembly Universal, and Deepgram Nova in their launch benchmarks. Sources: [Mistral Voxtral Transcribe 2 announcement](https://mistral.ai/news/voxtral-transcribe-2), [Mistral audio transcription docs](https://docs.mistral.ai/capabilities/audio/speech_to_text).
 
 Qwen3-ASR-Flash is another modern non-Whisper option. Alibaba documents support for 26 languages, emotion detection, and word-level timestamps. International pricing for Qwen3-ASR audio file recognition is listed at `$0.000035/second`, roughly `$0.0021/min` or `$0.126/hour`; Chinese Mainland pricing is lower. Sources: [Qwen-ASR API reference](https://www.alibabacloud.com/help/en/model-studio/qwen-asr-api-reference), [Alibaba Model Studio pricing](https://www.alibabacloud.com/help/en/model-studio/billing/).
+
+Qwen3-ASR also has an open-source forced-alignment path. The Qwen3-ASR technical report describes Qwen3-ForcedAligner-0.6B as a non-autoregressive timestamp predictor for aligning text/audio pairs, and the QwenLM repository documents passing a `forced_aligner` to return timestamps. Sources: [Qwen3-ASR technical report](https://arxiv.org/abs/2601.21337), [QwenLM/Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR).
 
 NVIDIA Parakeet TDT 0.6B v2 is an English-focused ASR model with punctuation and word timestamps available via NVIDIA NIM/Riva. It is attractive for self-hosting or NVIDIA-backed deployment, but it is not immediately usable with the current environment because no NVIDIA API key or NIM deployment is configured. Sources: [NVIDIA Parakeet model card](https://build.nvidia.com/nvidia/parakeet-tdt-0_6b-v2), [NVIDIA Speech NIM ASR docs](https://docs.nvidia.com/nim/speech/latest/asr/index.html).
 
@@ -60,7 +68,9 @@ Groq's pricing page lists Whisper Large v3 Turbo at `$0.04/hour`, and Groq's STT
 
 Self-hosted open-source ASR has no API cost but has machine time and setup cost. Faster CTranslate2-based runners exist for Whisper-family models, but this app no longer includes a self-hosted ASR provider.
 
-Conclusion: with only `OPENROUTER_API_KEY` available, the best immediate default is OpenRouter `openai/whisper-large-v3-turbo` because it is cheap and already authenticated. If another provider key is added, the first upgrade target should be Groq direct for the same turbo model with word timestamps, or Mistral Voxtral Mini Transcribe V2 for better claimed WER and word timestamps at higher cost. Qwen3-ASR is credible and modern, but it is not cheaper than Whisper Turbo and needs Alibaba/DashScope integration.
+ElevenLabs Scribe v2 documents precise word-level timestamps, speaker diarization, and dynamic audio tagging. It is a strong hosted candidate when transcript quality and structured metadata matter more than staying on the cheapest path. Source: [ElevenLabs transcription docs](https://elevenlabs.io/docs/capabilities/speech-to-text/).
+
+Conclusion: with only `OPENROUTER_API_KEY` available, the best immediate default is OpenRouter `openai/gpt-4o-mini-transcribe`, based on the bounded Australian podcast bake-off. Whisper Large V3 Turbo is cheaper, but it missed exact brand/show terms that made the UI transcript look bad. If another provider key is added, the first high-accuracy alignment target should be Qwen3-ASR/Qwen3-ForcedAligner, Mistral Voxtral Mini Transcribe V2, Deepgram Nova-3, or ElevenLabs Scribe v2. Groq direct remains the cheap word-timestamp option, but it still uses Whisper-family models.
 
 ## OpenRouter and DeepSeek
 
@@ -70,7 +80,7 @@ OpenRouter's DeepSeek V4 Pro page lists `deepseek/deepseek-v4-pro` at `$0.435/M 
 
 OpenRouter's DeepSeek V3.1 page lists `deepseek/deepseek-chat-v3.1` at `$0.15/M input tokens` and `$0.75/M output tokens`, with 32,768 context. Source: [DeepSeek V3.1 on OpenRouter](https://openrouter.ai/deepseek/deepseek-chat-v3.1).
 
-Conclusion: V4 Pro is the current default for chapter/category generation and transcript segment classification because the extra reasoning quality is useful for long, messy transcripts while still staying well below frontier closed-model pricing. DeepSeek V4 Pro is text-only on OpenRouter, so it is used after audio has been converted to timestamped text by Whisper. The default STT model is now `openai/whisper-large-v3-turbo`; it is materially cheaper and faster than large-v3, while the app improves cut precision with shorter chunks and model-estimated boundary offsets. OpenRouter responses include `usage.cost` for exact request accounting; the app records that value and uses published token prices only for budget estimates before a request is made.
+Conclusion: V4 Pro is the current default for chapter/category generation and transcript segment classification because the extra reasoning quality is useful for long, messy transcripts while still staying well below frontier closed-model pricing. DeepSeek V4 Pro is text-only on OpenRouter, so it is used after audio has been converted to timestamped text. The default STT model is now `openai/gpt-4o-mini-transcribe`; it is more expensive than Whisper Turbo but was materially more accurate on the tested Australian podcast clips. OpenRouter responses include `usage.cost` for exact request accounting; the app records that value and uses published token prices only for budget estimates before a request is made.
 
 OpenRouter's model API also reports audio-capable multimodal models such as Gemini Flash/Lite and OpenAI GPT audio models. Those can accept audio, but they are not a replacement for forced alignment in this service because the renderer still needs reliable start/end seconds for cuts. The current implementation therefore treats multimodal audio as an evaluation path, not the default production path.
 

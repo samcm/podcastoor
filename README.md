@@ -97,7 +97,7 @@ transcripts:
   providers:
     openRouter:
       enabled: true
-      model: openai/whisper-large-v3-turbo
+      model: openai/gpt-4o-mini-transcribe
       chunkSeconds: 20
 
 llm:
@@ -129,13 +129,13 @@ OpenRouter and OpenAI providers need a downloaded source file, so they only run 
 
 ## Methodology Choice
 
-The current cheapest reliable path with the available key is:
+The current best path with the available key is:
 
-- OpenRouter `openai/whisper-large-v3-turbo`: published at `$0.000667/min`.
+- OpenRouter `openai/gpt-4o-mini-transcribe`: best transcript accuracy in the current bounded bake-off against Australian podcast clips, with observed OpenRouter cost around `$0.002/min`.
 - DeepSeek V4 Pro on OpenRouter: text-only classifier over segment IDs, with exact request cost recorded from OpenRouter usage when available.
 - ffmpeg: cuts timestamped chunk windows, stream-copies source MP3 audio where possible, and inserts the marker tone.
 
-OpenRouter's STT endpoint currently returns text plus usage rather than native word timestamps, so this app chunks the source audio before transcription. The default is `openai/whisper-large-v3-turbo` with 20-second chunks; the text model can return estimated offsets inside the first and last chunk so cuts do not have to snap to whole chunks. OpenRouter chat responses include `usage.cost`; the app records that exact model-call cost when present and only falls back to token-price estimates for preflight budgeting.
+OpenRouter's STT endpoint currently returns text plus usage rather than native word timestamps, so this app chunks the source audio before transcription. The default is `openai/gpt-4o-mini-transcribe` with 20-second chunks; the text model can return estimated offsets inside the first and last chunk so cuts do not have to snap to whole chunks. OpenRouter chat responses include `usage.cost`; the app records that exact model-call cost when present and only falls back to token-price estimates for preflight budgeting.
 
 ## Data Layout
 

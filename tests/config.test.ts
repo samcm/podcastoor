@@ -11,7 +11,7 @@ describe("config", () => {
     expect(config.categories.preferred).toEqual([]);
     expect(config.categories.muted).toEqual([]);
     expect(config.llm.model).toBe("deepseek/deepseek-v4-pro");
-    expect(config.transcripts.providers.openRouter.model).toBe("openai/whisper-large-v3-turbo");
+    expect(config.transcripts.providers.openRouter.model).toBe("openai/gpt-4o-mini-transcribe");
     expect(config.automation.processOnStartup).toBe(true);
   });
 

@@ -8,13 +8,31 @@ Checked and exercised on 2026-05-06.
 | --- | ---: | --- | --- |
 | Metadata/description keywords | $0 | None | Rejected. The app no longer emits keyword-derived signals or cuts. |
 | Existing feed chapters | $0 | Good for topics, not ads | Preserve/remap when present; not enough for ad removal. |
-| OpenRouter `openai/whisper-large-v3-turbo` STT | `$0.000667/min` published | Chunk-level timestamps from pre-splitting | Current default because only OpenRouter key is available. |
+| OpenRouter `openai/whisper-large-v3-turbo` STT | `$0.000667/min` published | Chunk-level timestamps from pre-splitting | Rejected as default after the Australian podcast bake-off; it missed show, sponsor, and location terms that matter for classification. |
+| OpenRouter `openai/gpt-4o-mini-transcribe` STT | Observed about `$0.002/min` in the clip bake-off | Chunk-level timestamps from pre-splitting | Current default with only `OPENROUTER_API_KEY`; best tested transcript accuracy on the bounded Australian podcast clips. |
+| OpenRouter Gemini/MiMo audio chat | Varies by model; cheap in short clips | Model-generated timestamps only | Useful for audio reasoning experiments, but not reliable enough as the destructive cut alignment source. |
+| Direct Gemini audio prompting | Token priced | Model-generated timestamps only | Works for audio input and timestamped JSON prompts, but the tested transcript still missed key Australian/podcast terms. |
 | Groq `whisper-large-v3-turbo` direct | `$0.000667/min` published | Segment/word timestamps | Best cheap alignment upgrade once `GROQ_API_KEY` exists. |
-| Mistral Voxtral Mini Transcribe V2 | `$0.003/min` published | Word timestamps + diarization | Better claimed WER, higher cost, needs `MISTRAL_API_KEY`. |
-| Qwen3-ASR-Flash | About `$0.0021/min` international | Word timestamps | Modern contender, needs Alibaba/DashScope integration. |
+| Mistral Voxtral Mini Transcribe V2 | Around `$0.003/min` published | Word timestamps + diarization | Strong hosted non-Whisper contender, needs `MISTRAL_API_KEY`. |
+| Qwen3-ASR-Flash / Qwen3 ForcedAligner | About `$0.0021/min` international for hosted file transcription; local aligner has machine cost | Word timestamps / forced alignment | Strongest researched alignment direction; needs DashScope integration or local model deployment. |
+| Deepgram Nova-3 | `$0.0048-$0.0077/min` listed for pre-recorded monolingual depending plan | Word timestamps + confidence + utterances | Strong hosted production option, higher cost, needs `DEEPGRAM_API_KEY`. |
+| ElevenLabs Scribe v2 | Paid by audio duration | Word timestamps + diarization + audio tags | Strong hosted production option, needs `ELEVENLABS_API_KEY`. |
 | OpenAI transcription | Paid per minute | Good transcript endpoint option | Kept as provider option, disabled while OpenRouter STT is preferred. |
-| OpenRouter audio LMMs | Paid/varies | No stable forced-alignment contract | Useful for experiments, not default. |
 | DeepSeek V4 Pro text classifier | Stronger long-context reasoning with still modest cost | Uses ASR segment IDs | Chosen classifier/chapter model. |
+
+## Bounded STT Bake-Off
+
+The test clips were extracted from a configured Australian podcast episode and covered three hard areas: intro sponsor/show language, a mid-roll ad cluster, and a post-roll inserted ad. The scoring was a simple phrase-presence check over 16 expected phrases, not a full WER benchmark.
+
+| Model path | Hits | Cost for 5.67 min clips | Notes |
+| --- | ---: | ---: | --- |
+| OpenRouter STT `openai/gpt-4o-mini-transcribe` | 14/16 | `$0.010509` | Best tested default; recovered the show title plus sponsor/location terms that Whisper Turbo missed. |
+| OpenRouter audio chat `xiaomi/mimo-v2-omni` | 14/16 | `$0.003726` | Surprisingly good and cheap for transcript text, but no provider word/segment timestamp contract. |
+| OpenRouter audio chat `google/gemini-3-flash-preview` | 13/16 | `$0.012501` | Better than Whisper on this sample, but slower and more expensive than GPT-4o mini transcribe. |
+| OpenRouter STT `openai/whisper-large-v3-turbo` | 12/16 | `$0.003775` | Fast and cheap, but it produced the exact kind of bad brand/show errors seen in the UI. |
+| Direct Gemini `gemini-3.1-flash-lite-preview` | 11/16 | Gemini usage only | Audio works, including timestamped JSON prompts, but it still rendered `Four Pines` as `four Punts`/similar in the intro test. |
+
+OpenRouter's dedicated STT endpoint returned `text` plus `usage` for every tested STT model, but no native `words` or `segments` arrays. That means OpenRouter STT still needs pre-splitting to create coarse source-time windows.
 
 ## Current Pipeline
 
@@ -50,7 +68,11 @@ The better pipeline is:
 3. Snap the model's start/end decision to the nearest word boundary or silence boundary.
 4. Render cuts from those snapped boundaries, with minimal or zero padding.
 
-Groq direct is the first practical upgrade because its speech-to-text docs expose `verbose_json` with `timestamp_granularities` including `word` and `segment`, and its pricing page lists Whisper Large v3 Turbo at `$0.04/hour`. OpenAI's audio transcription API also supports `timestamp_granularities[]=word` with `verbose_json`, but `gpt-4o-mini-transcribe` is listed around `$0.003/min`, several times the Groq/Whisper Turbo price. Mistral Voxtral Mini Transcribe V2 and Qwen3-ASR are credible modern options with word timestamps, but they require new provider keys and integrations. Deepgram Nova-3 is a stronger hosted speech API with utterance/word objects and confidence, but materially more expensive.
+Groq direct is a practical cheap upgrade because its speech-to-text docs expose `verbose_json` with `timestamp_granularities` including `word` and `segment`, and its pricing page lists Whisper Large v3 Turbo at `$0.04/hour`. It may not fix transcript quality by itself, because the OpenRouter Whisper Turbo bake-off had clear Australian show/brand errors.
+
+The stronger accuracy/alignment direction is Qwen3-ASR plus Qwen3-ForcedAligner, or a hosted provider with word timestamps such as Mistral Voxtral Mini Transcribe V2, Deepgram Nova-3, or ElevenLabs Scribe v2. Qwen is especially relevant because its published ASR paper includes a separate non-autoregressive forced aligner, and Alibaba's hosted API documents word-level timestamps for Qwen3-ASR file transcription.
+
+Gemini audio models can be prompted to return timestamped transcript JSON. In the focused test, `gemini-3.1-flash-lite-preview` returned plausible 2-10 second segment timestamps and consumed real audio tokens, but it still made brand/name errors. These timestamps should be treated as model-estimated labels, not as a forced-alignment contract for destructive audio cuts.
 
 ## Dynamic Ad Duration Finding
 
@@ -58,4 +80,13 @@ Feed duration cannot be trusted as the render timeline. Dynamic ad insertion can
 
 ## Conclusion
 
-For this project, the current price/performance tradeoff with only `OPENROUTER_API_KEY` available is OpenRouter `openai/whisper-large-v3-turbo` STT over short chunks plus DeepSeek V4 Pro for text classification. OpenRouter STT does not currently provide native word timestamps through the tested endpoint, so chunking plus model-estimated boundary offsets is only an interim alignment layer. If exact cut placement is the priority, Groq direct STT is the cleaner cheap provider because its OpenAI-compatible endpoint documents `verbose_json` plus segment/word timestamp granularities at the same `$0.04/hour` turbo price. If accuracy matters more than cost, Mistral Voxtral Mini Transcribe V2 is the strongest researched candidate.
+For this project, the current best available default with only `OPENROUTER_API_KEY` is OpenRouter `openai/gpt-4o-mini-transcribe` STT over short chunks plus DeepSeek V4 Pro for text classification. It is not the final alignment answer, but it fixes a real transcript-quality regression compared with Whisper Large V3 Turbo.
+
+For laser-focused cuts, the next implementation should add a real alignment provider. The preferred path is:
+
+1. Use the best transcript model for text accuracy.
+2. Align transcript words back to the waveform with provider word timestamps or forced alignment.
+3. Let the ad model classify over aligned words/utterances.
+4. Snap cut boundaries to word end/start and nearby silence boundaries.
+
+Qwen3-ASR/Qwen3-ForcedAligner is the most interesting high-accuracy direction from the research pass. Deepgram Nova-3, ElevenLabs Scribe v2, and Mistral Voxtral Mini Transcribe V2 are the most straightforward hosted production-style alternatives because they expose structured timing metadata.

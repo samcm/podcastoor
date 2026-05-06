@@ -80,22 +80,11 @@ export async function classifyTranscriptWithOpenRouter(
     JSON.stringify(segments)
   ].join("\n\n");
 
-  const result = await postOpenRouterJson(apiKey, podcast.llm.model, "ad-detection", {
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are a podcast ad and topic segmentation classifier. You only classify provided timestamped transcript segments. Return strict JSON only."
-      },
-      { role: "user", content: prompt.slice(0, podcast.llm.maxTranscriptChars) }
-    ],
-    temperature: 0,
-    max_tokens: 2500,
-    response_format: { type: "json_object" }
-  });
+  const usage: LlmUsage[] = [];
+  let result = await postOpenRouterJson(apiKey, podcast.llm.model, "ad-detection", classifierBody(prompt, podcast.llm.maxTranscriptChars));
+  if (result.usage) usage.push(result.usage);
 
-  const content = result.content || "{}";
-  const parsed = parseJsonObject(content) as {
+  let parsed = parseJsonObject(result.content || "{}") as {
     adSegments?: Array<{
       startSegment?: number;
       endSegment?: number;
@@ -108,6 +97,17 @@ export async function classifyTranscriptWithOpenRouter(
     chapters?: Array<{ segment?: number; title?: string }>;
     notes?: string[];
   };
+  if ((parsed.adSegments ?? []).length === 0 && transcript.segments.length > 20) {
+    const auditPrompt = [
+      prompt,
+      "Second-pass audit:",
+      "The first pass returned no removals for this long podcast episode. Re-check carefully for commercial ad, sponsorship, promo, donation, merch, ticket sales, app-install, network privacy, gambling/betting, and dead-air/noise segments.",
+      "Return an empty adSegments array only if the transcript genuinely contains no commercial or noisy segments."
+    ].join("\n\n");
+    result = await postOpenRouterJson(apiKey, podcast.llm.model, "ad-detection", classifierBody(auditPrompt, podcast.llm.maxTranscriptChars));
+    if (result.usage) usage.push(result.usage);
+    parsed = parseJsonObject(result.content || "{}") as typeof parsed;
+  }
 
   const decisions = (parsed.adSegments ?? [])
     .map((entry): SegmentDecision | undefined => {
@@ -160,7 +160,23 @@ export async function classifyTranscriptWithOpenRouter(
     untimedSignals: [],
     modelNotes: parsed.notes ?? [],
     chapters,
-    llmUsage: result.usage ? [result.usage] : []
+    llmUsage: usage
+  };
+}
+
+function classifierBody(prompt: string, maxTranscriptChars: number): Record<string, unknown> {
+  return {
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a podcast ad and topic segmentation classifier. You only classify provided timestamped transcript segments. Return strict JSON only."
+      },
+      { role: "user", content: prompt.slice(0, maxTranscriptChars) }
+    ],
+    temperature: 0,
+    max_tokens: 2500,
+    response_format: { type: "json_object" }
   };
 }
 
@@ -171,7 +187,7 @@ async function postOpenRouterJson(
   body: Record<string, unknown>
 ): Promise<OpenRouterJsonResult> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180_000);
+  const timeout = setTimeout(() => controller.abort(), 360_000);
   let payload: {
     id?: string;
     model?: string;

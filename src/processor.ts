@@ -30,7 +30,7 @@ export interface ProcessRunSummary {
 }
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
-const PIPELINE_VERSION = "v5-model-only-ad-focused-chapter-aware";
+const PIPELINE_VERSION = "v10-empty-result-audit-pass";
 
 export async function processFeeds(options: ProcessingOptions): Promise<ProcessRunSummary> {
   const config = await loadConfig(options.configPath);
@@ -198,8 +198,9 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     });
   }
 
-  const reusableTranscript =
+  const reusableTranscriptCandidate =
     existing?.sourceFingerprint === episode.sourceFingerprint ? await readJson<Transcript>(paths.transcriptJson) : undefined;
+  const reusableTranscript = isTranscriptReusable(podcast, reusableTranscriptCandidate) ? reusableTranscriptCandidate : undefined;
   const transcript =
     reusableTranscript?.text || reusableTranscript?.segments.length
       ? reusableTranscript
@@ -431,6 +432,25 @@ function processingSignature(config: AppConfig, podcast: EffectivePodcastConfig,
     categories: podcast.categories
   };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function isTranscriptReusable(podcast: EffectivePodcastConfig, transcript: Transcript | null | undefined): transcript is Transcript {
+  if (!transcript || (!transcript.text && transcript.segments.length === 0)) return false;
+  if (transcript.source.startsWith("openrouter-stt:")) {
+    return podcast.transcripts.providers.openRouter.enabled && transcript.source === `openrouter-stt:${podcast.transcripts.providers.openRouter.model}`;
+  }
+  if (transcript.source.startsWith("openai:")) {
+    return podcast.transcripts.providers.openai.enabled && transcript.source === `openai:${podcast.transcripts.providers.openai.model}`;
+  }
+  if (transcript.usage?.provider === "openrouter") {
+    return podcast.transcripts.providers.openRouter.enabled && transcript.usage.model === podcast.transcripts.providers.openRouter.model;
+  }
+  if (transcript.usage?.provider === "openai") {
+    return podcast.transcripts.providers.openai.enabled && transcript.usage.model === podcast.transcripts.providers.openai.model;
+  }
+  if (transcript.usage?.provider === "pocketCasts") return podcast.transcripts.providers.pocketCasts.enabled;
+  if (transcript.usage?.provider === "feed") return podcast.transcripts.providers.feed.enabled;
+  return true;
 }
 
 async function buildEpisodeChapters(podcast: EffectivePodcastConfig, episode: ParsedEpisode, transcript: Transcript | undefined): Promise<{ chapters: Chapter[]; llmUsage: LlmUsage[] }> {

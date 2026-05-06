@@ -72,11 +72,11 @@ export const defaultConfig: AppConfig = {
       pocketCasts: { enabled: false, experimental: true, endpointTemplate: "" },
       openRouter: {
         enabled: true,
-        model: "openai/whisper-large-v3-turbo",
+        model: "openai/gpt-4o-mini-transcribe",
         language: "en",
         chunkSeconds: 20,
         concurrency: 2,
-        estimatedCostPerMinuteUsd: 0.000667
+        estimatedCostPerMinuteUsd: 0.002
       },
       openai: { enabled: false, model: "gpt-4o-mini-transcribe", estimatedCostPerMinuteUsd: 0.003 }
     }
