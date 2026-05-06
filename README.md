@@ -83,7 +83,7 @@ Removal requires timed model decisions against timestamped transcript chunks. Th
 
 RSS duration is not trusted for rendering. Dynamic ad insertion can make the actual downloaded MP3 longer than the feed's `itunes:duration`, so the renderer probes the source file and maps cuts against the real audio timeline.
 
-DeepSeek classifies timestamped transcript windows before audio is removed. Episode descriptions and publisher chapters are supplied as context, but the cut decision is model-only.
+Qwen classifies timestamped transcript windows before audio is removed. Episode descriptions and publisher chapters are supplied as context, but the cut decision is model-only.
 
 Chapters are normalized before serving: at most 10 items, topic-only labels, normally 1-4 words, and generated prefixes like `Discussion:` are stripped.
 
@@ -104,17 +104,17 @@ transcripts:
 llm:
   provider: openrouter
   enabled: true
-  model: deepseek/deepseek-v4-pro
+  model: qwen/qwen3.6-flash
 ```
 
 There is no fallback model configured. If the model call fails, the service records the failure and does not silently swap to another model.
 
-DeepSeek V4 Pro is text-only, so the pipeline is:
+The text classifier is separate from transcription, so the pipeline is:
 
 1. Audio download.
 2. OpenRouter audio-chat transcription into timestamped utterance segments.
-3. DeepSeek text classification over numbered transcript chunks.
-4. Segment index alignment back to transcript timestamps.
+3. Qwen text classification over timestamped transcript windows.
+4. Model-returned absolute source timestamps mapped back to transcript segments.
 5. ffmpeg cuts and marker-tone insertion.
 
 ## Transcription Providers

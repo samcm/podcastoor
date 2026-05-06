@@ -39,7 +39,7 @@ export function estimateEpisodeCost(podcast: EffectivePodcastConfig, transcript:
   if (podcast.llm.enabled && transcript?.text) {
     const windows = estimateClassifierWindows(transcript);
     const inputTokens = Math.ceil(Math.min(transcript.text.length, podcast.llm.maxTranscriptChars) / 4);
-    const outputTokens = 900 * windows;
+    const outputTokens = 700 * windows;
     const inputCost = (inputTokens / 1_000_000) * podcast.llm.estimatedInputUsdPerMillion;
     const outputCost = (outputTokens / 1_000_000) * podcast.llm.estimatedOutputUsdPerMillion;
     estimatedUsd += inputCost + outputCost;
@@ -53,7 +53,7 @@ function estimateClassifierWindows(transcript: Transcript): number {
   const lastEnd = transcript.segments.at(-1)?.end;
   const durationSeconds = lastEnd && Number.isFinite(lastEnd) ? lastEnd : transcript.usage?.seconds;
   if (!durationSeconds || durationSeconds <= 0) return 1;
-  return Math.max(1, Math.ceil(durationSeconds / 600));
+  return Math.max(1, Math.ceil(durationSeconds / 300));
 }
 
 export async function recordCost(

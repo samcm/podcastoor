@@ -52,7 +52,7 @@ Pocket Casts generated transcripts are not used by default. There is no public P
 
 4. Add model-assisted chapters:
    - enable OpenRouter only after budget checks,
-   - use `deepseek/deepseek-v4-pro` for long transcripts that need coherence,
+   - use `qwen/qwen3.6-flash` for the current ad classification path,
    - benchmark cheaper text models only if they preserve cut quality.
 
 5. Improve Pocket Casts compatibility:

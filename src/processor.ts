@@ -30,7 +30,7 @@ export interface ProcessRunSummary {
 }
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
-const PIPELINE_VERSION = "v13-focused-windowed-ad-detection";
+const PIPELINE_VERSION = "v14-absolute-time-ad-detection";
 
 export async function processFeeds(options: ProcessingOptions): Promise<ProcessRunSummary> {
   const config = await loadConfig(options.configPath);

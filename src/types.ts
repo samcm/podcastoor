@@ -214,7 +214,7 @@ export interface SegmentDecision {
   alignment?: {
     startSegmentIndex?: number;
     endSegmentIndex?: number;
-    method: "stt-chunk" | "feed-transcript-segment" | "manual";
+    method: "model-timestamp" | "stt-chunk" | "feed-transcript-segment" | "manual";
   };
   text?: string;
 }

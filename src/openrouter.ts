@@ -1,23 +1,28 @@
-import type { Chapter, DetectionResult, EffectivePodcastConfig, LlmUsage, ParsedEpisode, SegmentDecision, Transcript } from "./types.js";
+import type { Chapter, DetectionResult, EffectivePodcastConfig, LlmUsage, ParsedEpisode, SegmentDecision, Transcript, TranscriptSegment } from "./types.js";
 
 interface OpenRouterJsonResult {
   content: string;
   usage?: LlmUsage;
 }
 
-const CLASSIFIER_WINDOW_SECONDS = 600;
+const CLASSIFIER_WINDOW_SECONDS = 300;
 const CLASSIFIER_OVERLAP_SECONDS = 20;
+const AD_BLOCK_BRIDGE_SECONDS = 20;
+
+type ParsedAdSegment = {
+  startTime?: number;
+  endTime?: number;
+  startSegment?: number;
+  endSegment?: number;
+  action?: "remove" | "keep" | "mark-only";
+  confidence?: number;
+  reason?: string;
+  startOffsetSeconds?: number;
+  endOffsetSeconds?: number;
+};
 
 type ParsedClassification = {
-  adSegments?: Array<{
-    startSegment?: number;
-    endSegment?: number;
-    action?: "remove" | "keep" | "mark-only";
-    confidence?: number;
-    reason?: string;
-    startOffsetSeconds?: number;
-    endOffsetSeconds?: number;
-  }>;
+  adSegments?: ParsedAdSegment[];
 };
 
 export async function generateChaptersWithOpenRouter(podcast: EffectivePodcastConfig, transcript: Transcript): Promise<{ chapters: Chapter[]; usage?: LlmUsage }> {
@@ -88,41 +93,13 @@ export async function classifyTranscriptWithOpenRouter(
     }
   }
 
-  const decisions = parsedWindows
-    .flatMap((parsed) => parsed.adSegments ?? [])
-    .map((entry): SegmentDecision | undefined => {
-      const startSegment = clampSegmentIndex(entry.startSegment ?? -1, transcript.segments.length);
-      const endSegment = clampSegmentIndex(entry.endSegment ?? entry.startSegment ?? -1, transcript.segments.length);
-      if (startSegment < 0 || endSegment < 0) return undefined;
-      const orderedStart = Math.min(startSegment, endSegment);
-      const orderedEnd = Math.max(startSegment, endSegment);
-      const startSegmentData = transcript.segments[orderedStart];
-      const endSegmentData = transcript.segments[orderedEnd];
-      const start = startSegmentData.start + clampOffset(entry.startOffsetSeconds, startSegmentData, 0);
-      const end = endSegmentData.start + clampOffset(entry.endOffsetSeconds, endSegmentData, endSegmentData.end - endSegmentData.start);
-      if (end <= start) return undefined;
-      return {
-        start: Number(start.toFixed(3)),
-        end: Number(end.toFixed(3)),
-        action: entry.action ?? "remove",
-        confidence: Math.max(0, Math.min(1, entry.confidence ?? 0.75)),
-        reason: entry.reason ?? "OpenRouter transcript segment classification",
-        source: "model" as const,
-        alignment: {
-          startSegmentIndex: orderedStart,
-          endSegmentIndex: orderedEnd,
-          method: transcript.source.startsWith("openrouter-stt") || transcript.source.startsWith("openrouter-audio-chat") || transcript.source.startsWith("openai:")
-            ? ("stt-chunk" as const)
-            : ("feed-transcript-segment" as const)
-        },
-        text: transcript.segments
-          .slice(orderedStart, orderedEnd + 1)
-          .map((segment) => segment.text)
-          .join(" ")
-          .slice(0, 1200)
-      };
-    })
-    .filter((entry): entry is SegmentDecision => Boolean(entry));
+  const decisions = coalesceModelAdBlocks(
+    parsedWindows
+      .flatMap((parsed) => parsed.adSegments ?? [])
+      .map((entry) => parsedAdSegmentToDecision(entry, transcript))
+      .filter((entry): entry is SegmentDecision => Boolean(entry)),
+    transcript.segments
+  );
 
   return {
     decisions,
@@ -175,16 +152,24 @@ function buildClassifierPrompt(
     "Classify this timestamped transcript window semantically. Do not use keyword matching, phrase lists, or exact sponsor names.",
     "Find removable ad/noise spans. These include paid reads, product/service pitches, sponsor acknowledgements with commercial benefits or calls to action, donation/merch/ticket/app promotions, network privacy notices, betting/gambling commercial material, dynamically inserted ads, and dead-air/noise.",
     "Preserve editorial discussion, jokes, news, listener messages, and normal topic transitions even when they mention brands, teams, venues, or products in a non-commercial way.",
+    "Do not label ordinary editorial banter as product placement. A conversation about objects, awards, events, teams, venues, or plans remains editorial unless the purpose is clearly to sell, promote, invite, subscribe, donate, bet, download, visit, trial, or buy.",
     "Most professional podcast episodes contain at least one commercial span. Return an empty list only when this specific window is genuinely all editorial content.",
-    "Be decisive when a contiguous run is commercial. Be precise when only part of the first or last transcript segment is commercial.",
-    "Return global segment index ranges plus optional boundary offsets inside the first and last segment.",
-    "Offsets are seconds from that segment's start. Use offsets for mixed transition segments so cuts do not snap to a whole segment unnecessarily.",
+    "Publisher chapters are reference boundaries for editorial topics. Do not cut across a publisher chapter unless the transcript content at that time is clearly commercial or noise.",
+    "Be decisive when a contiguous run is commercial. A commercial block includes its setup, host banter that sells the offer, commercial benefits, calls to action, disclaimers, and sign-off lines until editorial conversation resumes.",
+    "Do not return only the brand/product sentence if the surrounding lines are still part of the same promotion. Include event, merch, subscription, app, donation, ticketing, trial, discount, store, and link/URL calls to action when they are promotional.",
+    "Do not require a sponsor brand to be present. Pre-roll live-event, tour, merchandise, subscription, fundraising, network, app, ticketing, or cross-promotion should be removed when it is selling or inviting listener action before the actual episode starts.",
+    "For mid-episode inserted ads, do not back up into setup banter, callbacks, jokes, or normal conversation immediately before the ad. The start timestamp should be the first segment whose own text is commercial, promo, inserted ad copy, or noise.",
+    "At episode endings, if the hosts have wrapped or signed off and the remaining content is commercial, jingle-like, network promo, disconnected brand copy, or inserted ad copy, remove the whole post-roll block from the first non-editorial ad fragment through the end of that block.",
+    "Be precise at the first and last timestamps so the cut does not leave the start or end of an ad behind.",
+    "Return absolute source-timeline timestamps as startTime and endTime, in seconds from the original episode start.",
+    "Use the transcript segment times as alignment anchors. If only part of the first or last transcript segment is commercial, place startTime/endTime inside that segment.",
     "Prefer under-cutting over deleting real content. Do not remove a whole mixed segment when normal episode content clearly resumes inside it.",
     "If a commercial read spans adjacent segments inside this window, merge it into one range.",
+    "If multiple commercial reads are separated only by silence, music, or non-editorial transition, they may be returned as one continuous removable break.",
     "Use action remove for confident ads/noise. Use mark-only only when it is a weak clue that should not be cut.",
     "Do not generate chapters, summaries, notes, reasoning, or explanations. Keep reason values to 2-6 words.",
     "Strict JSON only with this shape and no extra keys:",
-    "{\"adSegments\":[{\"startSegment\":0,\"endSegment\":1,\"startOffsetSeconds\":0,\"endOffsetSeconds\":8.5,\"action\":\"remove\",\"confidence\":0.9,\"reason\":\"sponsor read\"}]}",
+    "{\"adSegments\":[{\"startTime\":12.4,\"endTime\":48.9,\"action\":\"remove\",\"confidence\":0.9,\"reason\":\"commercial read\"}]}",
     "Segments:",
     JSON.stringify(segments)
   ].join("\n\n");
@@ -227,7 +212,7 @@ function classifierBody(prompt: string, maxTranscriptChars: number): Record<stri
       { role: "user", content: prompt.slice(0, maxTranscriptChars) }
     ],
     temperature: 0,
-    max_tokens: 900,
+    max_tokens: 700,
     response_format: { type: "json_object" }
   };
 }
@@ -399,15 +384,135 @@ function normalizeModelChapters(chapters: Chapter[]): Chapter[] {
     .slice(0, 10);
 }
 
+export function parsedAdSegmentToDecision(entry: ParsedAdSegment, transcript: Transcript): SegmentDecision | undefined {
+  const absolute = absoluteBoundsFromEntry(entry, transcript.segments);
+  const segmentAligned = absolute ?? segmentBoundsFromEntry(entry, transcript.segments);
+  if (!segmentAligned) return undefined;
+  const { start, end, startSegmentIndex, endSegmentIndex, method } = segmentAligned;
+  if (end <= start) return undefined;
+  return {
+    start: Number(start.toFixed(3)),
+    end: Number(end.toFixed(3)),
+    action: entry.action ?? "remove",
+    confidence: Math.max(0, Math.min(1, entry.confidence ?? 0.75)),
+    reason: (entry.reason ?? "model ad classification").slice(0, 120),
+    source: "model",
+    alignment: {
+      startSegmentIndex,
+      endSegmentIndex,
+      method
+    },
+    text: overlappingText(transcript.segments, start, end)
+  };
+}
+
+function absoluteBoundsFromEntry(
+  entry: ParsedAdSegment,
+  segments: TranscriptSegment[]
+): { start: number; end: number; startSegmentIndex: number; endSegmentIndex: number; method: "model-timestamp" } | undefined {
+  const startTime = numberOrUndefined(entry.startTime);
+  const endTime = numberOrUndefined(entry.endTime);
+  if (startTime == null || endTime == null || segments.length === 0) return undefined;
+  const duration = Math.max(...segments.map((segment) => segment.end));
+  const start = clampTime(Math.min(startTime, endTime), 0, duration);
+  const end = clampTime(Math.max(startTime, endTime), 0, duration);
+  if (end <= start) return undefined;
+  return {
+    start,
+    end,
+    startSegmentIndex: segmentIndexAtTime(segments, start),
+    endSegmentIndex: segmentIndexAtTime(segments, Math.max(start, end - 0.001)),
+    method: "model-timestamp"
+  };
+}
+
+function segmentBoundsFromEntry(
+  entry: ParsedAdSegment,
+  segments: TranscriptSegment[]
+):
+  | {
+      start: number;
+      end: number;
+      startSegmentIndex: number;
+      endSegmentIndex: number;
+      method: "stt-chunk" | "feed-transcript-segment";
+    }
+  | undefined {
+  const startSegment = clampSegmentIndex(entry.startSegment ?? -1, segments.length);
+  const endSegment = clampSegmentIndex(entry.endSegment ?? entry.startSegment ?? -1, segments.length);
+  if (startSegment < 0 || endSegment < 0) return undefined;
+  const orderedStart = Math.min(startSegment, endSegment);
+  const orderedEnd = Math.max(startSegment, endSegment);
+  const startSegmentData = segments[orderedStart];
+  const endSegmentData = segments[orderedEnd];
+  const start = boundaryTimeFromOffset(entry.startOffsetSeconds, startSegmentData, startSegmentData.start);
+  const end = boundaryTimeFromOffset(entry.endOffsetSeconds, endSegmentData, endSegmentData.end);
+  if (end <= start) return undefined;
+  return {
+    start,
+    end,
+    startSegmentIndex: orderedStart,
+    endSegmentIndex: orderedEnd,
+    method: "stt-chunk"
+  };
+}
+
+function boundaryTimeFromOffset(value: number | undefined, segment: TranscriptSegment, fallbackAbsolute: number): number {
+  if (value == null || !Number.isFinite(value)) return fallbackAbsolute;
+  if (value >= segment.start - 0.25 && value <= segment.end + 0.25) {
+    return clampTime(value, segment.start, segment.end);
+  }
+  return segment.start + clampTime(value, 0, Math.max(0, segment.end - segment.start));
+}
+
+function segmentIndexAtTime(segments: TranscriptSegment[], time: number): number {
+  for (const [index, segment] of segments.entries()) {
+    if (time >= segment.start - 0.001 && time <= segment.end + 0.001) return index;
+    if (time < segment.start) return Math.max(0, index - 1);
+  }
+  return Math.max(0, segments.length - 1);
+}
+
+function overlappingText(segments: TranscriptSegment[], start: number, end: number): string {
+  return segments
+    .filter((segment) => segment.end > start && segment.start < end)
+    .map((segment) => segment.text)
+    .join(" ")
+    .slice(0, 1200);
+}
+
+function coalesceModelAdBlocks(decisions: SegmentDecision[], segments: TranscriptSegment[]): SegmentDecision[] {
+  const remove = decisions
+    .filter((decision) => decision.action === "remove" && decision.confidence >= 0.85)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const other = decisions.filter((decision) => decision.action !== "remove" || decision.confidence < 0.85);
+  const merged: SegmentDecision[] = [];
+  for (const decision of remove) {
+    const previous = merged.at(-1);
+    if (previous && decision.start <= previous.end + AD_BLOCK_BRIDGE_SECONDS) {
+      previous.end = Math.max(previous.end, decision.end);
+      previous.confidence = Math.min(previous.confidence, decision.confidence);
+      previous.reason = previous.reason === decision.reason ? previous.reason : "commercial block";
+      previous.alignment = {
+        startSegmentIndex: previous.alignment?.startSegmentIndex,
+        endSegmentIndex: decision.alignment?.endSegmentIndex ?? previous.alignment?.endSegmentIndex,
+        method: "model-timestamp"
+      };
+      previous.text = overlappingText(segments, previous.start, previous.end);
+      continue;
+    }
+    merged.push({ ...decision });
+  }
+  return [...merged, ...other].sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
 function clampSegmentIndex(value: number, length: number): number {
   if (!Number.isInteger(value) || value < 0 || value >= length) return -1;
   return value;
 }
 
-function clampOffset(value: number | undefined, segment: { start: number; end: number }, fallback: number): number {
-  const duration = Math.max(0, segment.end - segment.start);
-  if (value == null || !Number.isFinite(value)) return Math.max(0, Math.min(duration, fallback));
-  return Math.max(0, Math.min(duration, value));
+function clampTime(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function parseJsonObject(content: string): unknown {

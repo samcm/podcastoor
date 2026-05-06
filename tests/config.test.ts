@@ -10,7 +10,7 @@ describe("config", () => {
     expect(config.podcasts).toEqual({});
     expect(config.categories.preferred).toEqual([]);
     expect(config.categories.muted).toEqual([]);
-    expect(config.llm.model).toBe("deepseek/deepseek-v4-pro");
+    expect(config.llm.model).toBe("qwen/qwen3.6-flash");
     expect(config.transcripts.providers.openRouter.mode).toBe("audioChat");
     expect(config.transcripts.providers.openRouter.model).toBe("xiaomi/mimo-v2-omni");
     expect(config.automation.processOnStartup).toBe(true);

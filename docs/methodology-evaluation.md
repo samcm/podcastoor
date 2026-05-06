@@ -19,7 +19,8 @@ Checked and exercised on 2026-05-06.
 | Deepgram Nova-3 | `$0.0048-$0.0077/min` listed for pre-recorded monolingual depending plan | Word timestamps + confidence + utterances | Strong hosted production option, higher cost, needs `DEEPGRAM_API_KEY`. |
 | ElevenLabs Scribe v2 | Paid by audio duration | Word timestamps + diarization + audio tags | Strong hosted production option, needs `ELEVENLABS_API_KEY`. |
 | OpenAI transcription | Paid per minute | Good transcript endpoint option | Kept as provider option, disabled while OpenRouter audio transcription is preferred. |
-| DeepSeek V4 Pro text classifier | Stronger long-context reasoning with still modest cost | Uses ASR segment IDs | Chosen classifier/chapter model. |
+| Qwen 3.6 Flash text classifier | About `$0.0246` observed for a 33.4 min full-episode 7-window ad classification smoke test | Returns absolute source timestamps | Current default classifier after full-episode smoke test. |
+| DeepSeek V4 Pro text classifier | Stronger long-context reasoning with still modest cost | Uses ASR segment IDs or absolute timestamps | Kept as a configurable option, but not the current default after the latest full-episode smoke test. |
 
 ## Bounded STT Bake-Off
 
@@ -37,7 +38,7 @@ OpenRouter's dedicated STT endpoint returned `text` plus `usage` for every teste
 
 ## Current Pipeline
 
-DeepSeek V4 Pro is text-only on OpenRouter. The service therefore does not send podcast audio directly to DeepSeek.
+The text classifier is separate from transcription. The service does not send podcast audio directly to the text classifier.
 
 The running pipeline is:
 
@@ -45,10 +46,10 @@ The running pipeline is:
 2. Download the real audio enclosure.
 3. Probe the actual MP3 duration with ffprobe.
 4. Split audio into bounded chunks and transcribe each chunk through OpenRouter audio chat into timestamped utterance JSON.
-5. Send smaller numbered timestamped transcript windows, episode description, and nearby publisher chapters to `deepseek/deepseek-v4-pro`.
-6. Ask the model to return only ad/noise segment index ranges plus optional start/end offsets inside boundary chunks.
-7. Convert segment index ranges and offsets back to source-audio windows.
-8. Merge/pad removal windows.
+5. Send smaller timestamped transcript windows, episode description, and nearby publisher chapters to `qwen/qwen3.6-flash`.
+6. Ask the model to return only ad/noise windows as absolute source-timeline `startTime`/`endTime` values.
+7. Map those absolute decisions back to transcript segments for audit text.
+8. Merge adjacent model-confirmed ad blocks across short non-editorial gaps, then pad removal windows.
 9. Render with ffmpeg, stream-copying source MP3 audio where possible, and insert the marker tone.
 10. Rewrite RSS to local audio, chapter, and transcript URLs.
 
@@ -81,7 +82,7 @@ Feed duration cannot be trusted as the render timeline. Dynamic ad insertion can
 
 ## Conclusion
 
-For this project, the current best available default with only `OPENROUTER_API_KEY` is OpenRouter `xiaomi/mimo-v2-omni` audio-chat transcription plus DeepSeek V4 Pro for text classification. It is not the final alignment answer, but it gives better OpenRouter-only timing granularity than the dedicated STT wrapper while preserving the best phrase accuracy from the bounded sweep.
+For this project, the current best available default with only `OPENROUTER_API_KEY` is OpenRouter `xiaomi/mimo-v2-omni` audio-chat transcription plus `qwen/qwen3.6-flash` for text classification. It is not the final alignment answer, but it gives better OpenRouter-only timing granularity than the dedicated STT wrapper while passing the full-episode ad-block smoke test that cheaper Gemini and DeepSeek Flash classifier passes missed or overreached.
 
 For laser-focused cuts, the next implementation should add a real alignment provider. The preferred path is:
 

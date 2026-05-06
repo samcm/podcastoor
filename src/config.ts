@@ -85,9 +85,9 @@ export const defaultConfig: AppConfig = {
   llm: {
     provider: "openrouter",
     enabled: true,
-    model: "deepseek/deepseek-v4-pro",
-    estimatedInputUsdPerMillion: 0.435,
-    estimatedOutputUsdPerMillion: 0.87,
+    model: "qwen/qwen3.6-flash",
+    estimatedInputUsdPerMillion: 0.25,
+    estimatedOutputUsdPerMillion: 1.5,
     maxTranscriptChars: 180000
   },
   detection: {
