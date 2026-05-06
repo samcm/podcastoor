@@ -39,7 +39,7 @@ export function estimateEpisodeCost(podcast: EffectivePodcastConfig, transcript:
   if (podcast.llm.enabled && transcript?.text) {
     const windows = estimateClassifierWindows(transcript);
     const inputTokens = Math.ceil(Math.min(transcript.text.length, podcast.llm.maxTranscriptChars) / 4);
-    const outputTokens = 1600 * windows;
+    const outputTokens = 900 * windows;
     const inputCost = (inputTokens / 1_000_000) * podcast.llm.estimatedInputUsdPerMillion;
     const outputCost = (outputTokens / 1_000_000) * podcast.llm.estimatedOutputUsdPerMillion;
     estimatedUsd += inputCost + outputCost;

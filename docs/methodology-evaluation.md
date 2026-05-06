@@ -46,7 +46,7 @@ The running pipeline is:
 3. Probe the actual MP3 duration with ffprobe.
 4. Split audio into bounded chunks and transcribe each chunk through OpenRouter audio chat into timestamped utterance JSON.
 5. Send smaller numbered timestamped transcript windows, episode description, and nearby publisher chapters to `deepseek/deepseek-v4-pro`.
-6. Ask the model to return segment index ranges plus optional start/end offsets inside boundary chunks.
+6. Ask the model to return only ad/noise segment index ranges plus optional start/end offsets inside boundary chunks.
 7. Convert segment index ranges and offsets back to source-audio windows.
 8. Merge/pad removal windows.
 9. Render with ffmpeg, stream-copying source MP3 audio where possible, and insert the marker tone.
