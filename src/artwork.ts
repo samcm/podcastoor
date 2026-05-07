@@ -1,13 +1,23 @@
-import { writeFile } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { AppConfig, ParsedFeed } from "./types.js";
 import { podcastAssetPaths } from "./storage.js";
 import { ensureDir, pathExists, writeJson } from "./utils.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface ArtworkResult {
   status: "disabled" | "exists" | "skipped" | "generated";
   path?: string;
   sourceUrl?: string;
   model?: string;
+}
+
+export interface FeedArtworkResult {
+  path: string;
+  mimeType: "image/jpeg";
+  size: number;
 }
 
 export async function ensurePodcastArtwork(config: AppConfig, podcastSlug: string, feed: ParsedFeed): Promise<ArtworkResult> {
@@ -42,6 +52,39 @@ export async function ensurePodcastArtwork(config: AppConfig, podcastSlug: strin
     costUsd: generated.costUsd
   });
   return { status: "generated", path: paths.artwork, sourceUrl: feed.imageUrl, model: config.artwork.model };
+}
+
+export async function ensureCompatiblePodcastArtwork(config: AppConfig, podcastSlug: string): Promise<FeedArtworkResult | undefined> {
+  const paths = podcastAssetPaths(config, podcastSlug);
+  if (await pathExists(paths.feedArtwork)) {
+    return { path: paths.feedArtwork, mimeType: "image/jpeg", size: (await stat(paths.feedArtwork)).size };
+  }
+  if (!(await pathExists(paths.artwork))) return undefined;
+
+  await ensureDir(paths.dir);
+  await execFileAsync("ffmpeg", [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-y",
+    "-i",
+    paths.artwork,
+    "-vf",
+    "scale=2048:2048:force_original_aspect_ratio=increase,crop=2048:2048,format=yuvj420p",
+    "-q:v",
+    "4",
+    paths.feedArtwork
+  ]);
+  const info = await stat(paths.feedArtwork);
+  await writeJson(paths.feedArtworkMeta, {
+    generatedAt: new Date().toISOString(),
+    sourcePath: paths.artwork,
+    outputMimeType: "image/jpeg",
+    width: 2048,
+    height: 2048,
+    bytes: info.size
+  });
+  return { path: paths.feedArtwork, mimeType: "image/jpeg", size: info.size };
 }
 
 async function fetchSourceImage(url: string): Promise<{ base64: string; mimeType: string }> {

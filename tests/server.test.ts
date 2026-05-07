@@ -40,6 +40,33 @@ describe("server", () => {
     expect(response.body).toBe("cdef");
   });
 
+  it("serves podcast feed artwork with crawler-friendly headers", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "podcastoor-artwork-"));
+    const assetDir = path.join(dataDir, "podcasts", "show", "assets");
+    await mkdir(assetDir, { recursive: true });
+    await writeFile(path.join(assetDir, "artwork-ad-free-feed.jpg"), "jpegdata");
+
+    const app = buildServer({
+      ...defaultConfig,
+      storage: { dataDir },
+      podcasts: {
+        show: { name: "Show", feedUrl: "https://example.com/feed.xml" }
+      }
+    });
+
+    const head = await app.inject({ method: "HEAD", url: "/assets/show/artwork.jpg" });
+    const get = await app.inject({ method: "GET", url: "/assets/show/artwork.jpg" });
+    await app.close();
+
+    expect(head.statusCode).toBe(200);
+    expect(head.headers["content-type"]).toContain("image/jpeg");
+    expect(head.headers["content-length"]).toBe("8");
+    expect(head.headers["cache-control"]).toContain("immutable");
+    expect(head.body).toBe("");
+    expect(get.statusCode).toBe(200);
+    expect(get.body).toBe("jpegdata");
+  });
+
   it("serves alternate feed endpoints with distinct proxy identities", async () => {
     const feedUrl = "https://feeds.example.com/show.xml";
     const feedXml = `<?xml version="1.0" encoding="utf-8"?>

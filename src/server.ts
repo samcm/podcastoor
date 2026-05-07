@@ -7,6 +7,7 @@ import { loadConfig, resolvePodcastConfig } from "./config.js";
 import { fetchFeed, parseFeed, rewriteFeed } from "./feed.js";
 import { episodePaths, podcastAssetPaths, readManifest } from "./storage.js";
 import { absoluteUrl, pathExists, readJson } from "./utils.js";
+import { ensureCompatiblePodcastArtwork } from "./artwork.js";
 import { getAutomationState, startAutomation } from "./automation.js";
 import { getPodcastDeepDive, listPodcastSummaries } from "./library.js";
 import { mapOriginalToProcessed, normalizeSegments, removalSegments, type Segment } from "./timeline.js";
@@ -252,9 +253,17 @@ export function buildServer(config: AppConfig) {
       return { error: "artwork not found" };
     }
     const meta = await readJson<{ outputMimeType?: string }>(paths.artworkMeta);
-    reply.type(meta?.outputMimeType || "image/png");
-    reply.header("Cache-Control", "public, max-age=86400");
-    return reply.send(createReadStream(paths.artwork));
+    return sendStaticAsset(reply, paths.artwork, meta?.outputMimeType || "image/png", "public, max-age=86400");
+  });
+
+  app.get("/assets/:podcastSlug/artwork.jpg", async (request, reply) => {
+    const { podcastSlug } = request.params as { podcastSlug: string };
+    const artwork = await ensureCompatiblePodcastArtwork(config, podcastSlug);
+    if (!artwork) {
+      reply.code(404);
+      return { error: "artwork not found" };
+    }
+    return sendStaticAsset(reply, artwork.path, artwork.mimeType, "public, max-age=31536000, immutable");
   });
 
   app.get("/metrics", async () => {
@@ -310,6 +319,15 @@ async function sendAudioFile(request: FastifyRequest, reply: FastifyReply, fileP
   reply.header("Content-Range", `bytes ${start}-${end}/${info.size}`);
   reply.header("Content-Length", String(end - start + 1));
   return reply.send(createReadStream(filePath, { start, end }));
+}
+
+async function sendStaticAsset(reply: FastifyReply, filePath: string, contentType: string, cacheControl: string) {
+  const info = await stat(filePath);
+  reply.type(contentType);
+  reply.header("Content-Length", String(info.size));
+  reply.header("Last-Modified", info.mtime.toUTCString());
+  reply.header("Cache-Control", cacheControl);
+  return reply.send(createReadStream(filePath));
 }
 
 interface FeedRequest {
@@ -402,8 +420,7 @@ async function buildRewrittenFeed(config: AppConfig, podcastSlug: string, feedRe
 async function localArtworkUrl(config: AppConfig, podcastSlug: string): Promise<string | undefined> {
   const paths = podcastAssetPaths(config, podcastSlug);
   if (!(await pathExists(paths.artwork))) return undefined;
-  const info = await stat(paths.artwork);
-  return absoluteUrl(config.server.publicBaseUrl, `/assets/${podcastSlug}/artwork.png?v=${encodeURIComponent(String(Math.floor(info.mtimeMs)))}`);
+  return absoluteUrl(config.server.publicBaseUrl, `/assets/${podcastSlug}/artwork.jpg`);
 }
 
 function renderPodcastList(

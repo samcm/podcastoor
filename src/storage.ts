@@ -18,6 +18,8 @@ export interface PodcastAssetPaths {
   dir: string;
   artwork: string;
   artworkMeta: string;
+  feedArtwork: string;
+  feedArtworkMeta: string;
 }
 
 export function podcastDir(config: AppConfig, podcastSlug: string): string {
@@ -29,7 +31,9 @@ export function podcastAssetPaths(config: AppConfig, podcastSlug: string): Podca
   return {
     dir,
     artwork: path.join(dir, "artwork-ad-free.png"),
-    artworkMeta: path.join(dir, "artwork-ad-free.json")
+    artworkMeta: path.join(dir, "artwork-ad-free.json"),
+    feedArtwork: path.join(dir, "artwork-ad-free-feed.jpg"),
+    feedArtworkMeta: path.join(dir, "artwork-ad-free-feed.json")
   };
 }
 

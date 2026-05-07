@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
@@ -140,8 +140,7 @@ async function readPodcastFeedMetadata(feedUrl: string): Promise<{
 async function readLocalArtworkUrl(config: AppConfig, slug: string): Promise<string | undefined> {
   const paths = podcastAssetPaths(config, slug);
   if (!(await pathExists(paths.artwork))) return undefined;
-  const info = await stat(paths.artwork);
-  return absoluteUrl(config.server.publicBaseUrl, `/assets/${slug}/artwork.png?v=${encodeURIComponent(String(Math.floor(info.mtimeMs)))}`);
+  return absoluteUrl(config.server.publicBaseUrl, `/assets/${slug}/artwork.jpg`);
 }
 
 async function enrichEpisodeForUi(config: AppConfig, slug: string, manifest: EpisodeManifest) {
