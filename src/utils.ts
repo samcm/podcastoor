@@ -27,6 +27,9 @@ export function stripHtml(value: string): string {
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, "\"")
+    .replace(/&rsquo;|&lsquo;/g, "'")
+    .replace(/&rdquo;|&ldquo;/g, "\"")
+    .replace(/&ndash;|&mdash;/g, "-")
     .replace(/&#39;|&apos;/g, "'")
     .replace(/\s+/g, " ")
     .trim();

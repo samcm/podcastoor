@@ -1,10 +1,11 @@
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import type { AppConfig, EpisodeManifest, Transcript } from "./types.js";
-import { episodePaths, readManifest } from "./storage.js";
-import { pathExists, readJson } from "./utils.js";
+import { fetchFeed, parseFeed } from "./feed.js";
+import { episodePaths, podcastAssetPaths, readManifest } from "./storage.js";
+import { absoluteUrl, pathExists, readJson } from "./utils.js";
 import { resolvePodcastConfig } from "./config.js";
 
 const execFileAsync = promisify(execFile);
@@ -17,6 +18,8 @@ export interface PodcastSummary {
   manifestCount: number;
   processedCount: number;
   dryRunCount: number;
+  transcriptionModel: string;
+  classifierModel: string;
   latestEpisode?: {
     title: string;
     pubDate?: string;
@@ -27,6 +30,7 @@ export interface PodcastSummary {
 export async function listPodcastSummaries(config: AppConfig): Promise<PodcastSummary[]> {
   return Promise.all(
     Object.entries(config.podcasts).map(async ([slug, podcast]) => {
+      const effectivePodcast = resolvePodcastConfig(config, slug);
       const manifests = await listManifests(config, slug);
       const sorted = manifests.sort((a, b) => Date.parse(b.pubDate ?? b.generatedAt) - Date.parse(a.pubDate ?? a.generatedAt));
       return {
@@ -37,6 +41,8 @@ export async function listPodcastSummaries(config: AppConfig): Promise<PodcastSu
         manifestCount: manifests.length,
         processedCount: manifests.filter((manifest) => manifest.audio.status === "completed").length,
         dryRunCount: manifests.filter((manifest) => manifest.audio.status === "dry-run").length,
+        transcriptionModel: transcriptionModelLabel(effectivePodcast.transcripts),
+        classifierModel: effectivePodcast.llm.enabled ? effectivePodcast.llm.model : "disabled",
         latestEpisode: sorted[0]
           ? {
               title: sorted[0].title,
@@ -49,11 +55,25 @@ export async function listPodcastSummaries(config: AppConfig): Promise<PodcastSu
   );
 }
 
+function transcriptionModelLabel(config: AppConfig["transcripts"]): string {
+  if (config.providers.openRouter.enabled) return config.providers.openRouter.model;
+  if (config.providers.openai.enabled) return config.providers.openai.model;
+  if (config.providers.pocketCasts.enabled) return "Pocket Casts";
+  if (config.providers.feed.enabled) return "feed transcript";
+  return "disabled";
+}
+
 export async function getPodcastDeepDive(config: AppConfig, slug: string) {
   const podcast = config.podcasts[slug];
   if (!podcast) return undefined;
   const effectivePodcast = resolvePodcastConfig(config, slug);
-  const manifests = await listManifests(config, slug);
+  const [manifests, feedMetadata, localArtworkUrl] = await Promise.all([
+    listManifests(config, slug),
+    readPodcastFeedMetadata(effectivePodcast.feedUrl),
+    readLocalArtworkUrl(config, slug)
+  ]);
+  const processedCount = manifests.filter((manifest) => manifest.audio.status === "completed").length;
+  const dryRunCount = manifests.filter((manifest) => manifest.audio.status === "dry-run").length;
   const episodes = await Promise.all(
     manifests
       .sort((a, b) => Date.parse(b.pubDate ?? b.generatedAt) - Date.parse(a.pubDate ?? a.generatedAt))
@@ -65,6 +85,19 @@ export async function getPodcastDeepDive(config: AppConfig, slug: string) {
     feedUrl: podcast.feedUrl,
     subscriptionUrl: `${config.server.publicBaseUrl}/feeds/${slug}.xml`,
     lookbackDays: podcast.lookbackDays ?? config.processing.lookbackDays,
+    metadata: {
+      feedTitle: feedMetadata.title,
+      description: feedMetadata.description,
+      sourceImageUrl: feedMetadata.imageUrl,
+      localArtworkUrl,
+      upstreamEpisodeCount: feedMetadata.episodeCount,
+      feedError: feedMetadata.error,
+      manifestCount: manifests.length,
+      processedCount,
+      dryRunCount,
+      transcriptionModel: transcriptionModelLabel(effectivePodcast.transcripts),
+      classifierModel: effectivePodcast.llm.enabled ? effectivePodcast.llm.model : "disabled"
+    },
     config: {
       processing: config.processing,
       effectiveProcessing: effectivePodcast.processing,
@@ -77,6 +110,35 @@ export async function getPodcastDeepDive(config: AppConfig, slug: string) {
     },
     episodes
   };
+}
+
+async function readPodcastFeedMetadata(feedUrl: string): Promise<{
+  title?: string;
+  description?: string;
+  imageUrl?: string;
+  episodeCount?: number;
+  error?: string;
+}> {
+  try {
+    const parsed = parseFeed(await fetchFeed(feedUrl), feedUrl);
+    return {
+      title: parsed.title,
+      description: parsed.description,
+      imageUrl: parsed.imageUrl,
+      episodeCount: parsed.episodes.length
+    };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function readLocalArtworkUrl(config: AppConfig, slug: string): Promise<string | undefined> {
+  const paths = podcastAssetPaths(config, slug);
+  if (!(await pathExists(paths.artwork))) return undefined;
+  const info = await stat(paths.artwork);
+  return absoluteUrl(config.server.publicBaseUrl, `/assets/${slug}/artwork.png?v=${encodeURIComponent(String(Math.floor(info.mtimeMs)))}`);
 }
 
 async function enrichEpisodeForUi(config: AppConfig, slug: string, manifest: EpisodeManifest) {

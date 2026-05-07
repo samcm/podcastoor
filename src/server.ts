@@ -355,12 +355,9 @@ function renderPodcastList(
       <p>${automation.running ? "Processing is running" : "Processing is idle"}${automation.lastFinishedAt ? ` · last finished ${renderLocalTime(automation.lastFinishedAt)}` : ""}</p>
       <p>Autonomous mode is enabled when configured: process on startup, then repeat on the configured interval. <a href="/costs">Cost dashboard</a></p>
     </header>
-    ${renderControlPanel(podcasts)}
-    ${renderQueue(queue)}
-    ${renderActivityLog(activity)}
     <main class="panel">
       <table>
-        <thead><tr><th>Podcast</th><th>Manifests</th><th>Rendered</th><th>Latest</th><th>Feed</th></tr></thead>
+        <thead><tr><th>Podcast</th><th>Manifests</th><th>Rendered</th><th>Transcription</th><th>Classifier</th><th>Latest</th><th>Feed</th></tr></thead>
         <tbody>
           ${podcasts
             .map(
@@ -368,6 +365,8 @@ function renderPodcastList(
                 <td><a href="/podcasts/${podcast.slug}">${escapeHtml(podcast.name)}</a></td>
                 <td>${podcast.manifestCount}</td>
                 <td>${podcast.processedCount}</td>
+                <td>${escapeHtml(podcast.transcriptionModel)}</td>
+                <td>${escapeHtml(podcast.classifierModel)}</td>
                 <td>${podcast.latestEpisode ? escapeHtml(podcast.latestEpisode.title) : "None yet"}</td>
                 <td><a href="/feeds/${podcast.slug}.xml">RSS</a></td>
               </tr>`
@@ -375,7 +374,10 @@ function renderPodcastList(
             .join("")}
         </tbody>
       </table>
-    </main>`
+    </main>
+    ${renderControlPanel(podcasts)}
+    ${renderQueue(queue)}
+    ${renderActivityLog(activity)}`
   );
 }
 
@@ -469,6 +471,7 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
       <h1>${escapeHtml(deepDive.name)}</h1>
       <p>${escapeHtml(deepDive.feedUrl)}</p>
     </header>
+    ${renderPodcastOverview(deepDive)}
     <section class="panel meta">
       <div><span>Subscription URL</span><code>${escapeHtml(deepDive.subscriptionUrl)}</code></div>
       <div><span>Lookback</span><strong>${deepDive.lookbackDays} days</strong></div>
@@ -505,7 +508,10 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
               <dt>Untimed Signals</dt><dd>${episode.untimedSignals.length}</dd>
               <dt>Chapters</dt><dd>${episode.chapters.length}</dd>
               <dt>Total Cost</dt><dd>$${episode.costs.actualUsd.toFixed(6)}</dd>
+              <dt>Transcript Model</dt><dd>${escapeHtml(episode.transcript?.model ?? episode.transcript?.source ?? "unknown")}</dd>
               <dt>Transcript Cost</dt><dd>$${transcriptCost.toFixed(6)}${transcriptSegments ? ` · ${transcriptSegments} segments` : ""}</dd>
+              <dt>Ad Model</dt><dd>${escapeHtml(llmModelLabel(episode, "ad-detection"))}</dd>
+              <dt>Chapter Model</dt><dd>${escapeHtml(llmModelLabel(episode, "chapter-generation"))}</dd>
               <dt>Text LLM Cost</dt><dd>$${textLlmCost.toFixed(6)} · ${(episode.llm ?? []).length} calls</dd>
               <dt>Alignment</dt><dd>${renderAlignmentSummary(episode)}</dd>
             </dl>
@@ -522,6 +528,37 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
         .join("")}
     </main>`
   );
+}
+
+function renderPodcastOverview(deepDive: DeepDive): string {
+  const metadata = deepDive.metadata;
+  const artworkUrl = metadata.localArtworkUrl ?? metadata.sourceImageUrl;
+  const title = metadata.feedTitle || deepDive.name;
+  const description = metadata.description || (metadata.feedError ? `Source metadata unavailable: ${metadata.feedError}` : "No source description found in the RSS feed.");
+  return `<section class="panel podcast-overview">
+    ${
+      artworkUrl
+        ? `<img class="podcast-art" src="${escapeHtml(artworkUrl)}" alt="${escapeHtml(title)} artwork">`
+        : `<div class="podcast-art placeholder-art">Ad Free</div>`
+    }
+    <div class="podcast-overview-body">
+      <div class="section-head">
+        <h2>${escapeHtml(title)}</h2>
+        <a href="/feeds/${deepDive.slug}.xml">RSS</a>
+      </div>
+      <p>${escapeHtml(description)}</p>
+      <div class="overview-stats">
+        <div><span>Source Episodes</span><strong>${formatCount(metadata.upstreamEpisodeCount)}</strong></div>
+        <div><span>Local Manifests</span><strong>${metadata.manifestCount}</strong></div>
+        <div><span>Rendered</span><strong>${metadata.processedCount}</strong></div>
+        <div><span>Dry Runs</span><strong>${metadata.dryRunCount}</strong></div>
+        <div><span>Lookback</span><strong>${deepDive.lookbackDays} days</strong></div>
+        <div><span>Transcript Model</span><strong>${escapeHtml(metadata.transcriptionModel)}</strong></div>
+        <div><span>Classifier Model</span><strong>${escapeHtml(metadata.classifierModel)}</strong></div>
+        <div><span>Artwork</span><strong>${metadata.localArtworkUrl ? "generated" : metadata.sourceImageUrl ? "source" : "missing"}</strong></div>
+      </div>
+    </div>
+  </section>`;
 }
 
 function renderPodcastControls(deepDive: DeepDive): string {
@@ -842,6 +879,15 @@ function page(title: string, body: string): string {
     .meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
     .meta div { display:flex; flex-direction:column; gap:4px; min-width:0; }
     .meta span, dt { color:var(--muted); font-size:12px; text-transform:uppercase; }
+    .podcast-overview { display:grid; grid-template-columns:160px minmax(0,1fr); gap:18px; align-items:start; margin-bottom:14px; }
+    .podcast-art { width:160px; aspect-ratio:1; object-fit:cover; border:1px solid var(--line); border-radius:8px; background:#fff; }
+    .placeholder-art { display:flex; align-items:center; justify-content:center; color:#991b1b; font-weight:800; text-transform:uppercase; border-color:rgba(153,27,27,.35); }
+    .podcast-overview-body { min-width:0; }
+    .podcast-overview p { margin:8px 0 0; color:var(--muted); max-width:84ch; }
+    .overview-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:10px 14px; margin-top:16px; }
+    .overview-stats div { min-width:0; border-top:1px solid var(--line); padding-top:8px; }
+    .overview-stats span { display:block; color:var(--muted); font-size:12px; text-transform:uppercase; }
+    .overview-stats strong { display:block; margin-top:3px; overflow-wrap:anywhere; }
     code { white-space:normal; overflow-wrap:anywhere; }
     .controls { margin:0 auto 14px; display:grid; gap:12px; }
     .controls form, .inline-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
@@ -914,6 +960,8 @@ function page(title: string, body: string): string {
     .pill.danger { border-color:rgba(220,38,38,.35); color:#991b1b; background:rgba(220,38,38,.08); }
     .pill.warn { border-color:rgba(217,119,6,.35); color:#92400e; background:rgba(245,158,11,.10); }
     @media (max-width: 760px) {
+      .podcast-overview { grid-template-columns:1fr; }
+      .podcast-art { width:min(180px, 100%); }
       .activity li { grid-template-columns:1fr; }
       .cut-list li { grid-template-columns:1fr 1fr; }
       .cut-list span, .cut-list small { grid-column:1 / -1; }
@@ -1064,6 +1112,10 @@ function formatSeconds(value: number | undefined): string {
   const seconds = total % 60;
   if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatCount(value: number | undefined): string {
+  return value == null ? "unknown" : new Intl.NumberFormat("en").format(value);
 }
 
 function renderLocalTime(value: string | undefined | null, mode: "activity" | "full" = "full"): string {
@@ -1228,6 +1280,11 @@ function renderQualityLabel(audio: EpisodeManifest["audio"]): string {
   if (audio.renderMode === "source-copy") return `source-copy${audio.bitrateKbps ? ` · ${audio.bitrateKbps} kbps` : ""}`;
   if (audio.renderMode === "encode") return `encoded${audio.bitrateKbps ? ` · ${audio.bitrateKbps} kbps` : ""}`;
   return audio.renderMode ?? "unknown";
+}
+
+function llmModelLabel(episode: UiEpisode, purpose: "ad-detection" | "chapter-generation"): string {
+  const models = Array.from(new Set((episode.llm ?? []).filter((usage) => usage.purpose === purpose).map((usage) => usage.model).filter(Boolean)));
+  return models.length ? models.join(", ") : "none recorded";
 }
 
 function formatActivityDetails(details: Record<string, unknown>): string {

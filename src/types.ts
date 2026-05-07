@@ -206,6 +206,7 @@ export interface ParsedFeed {
   rawDoc: Record<string, unknown>;
   xml: string;
   title: string;
+  description?: string;
   feedUrl: string;
   imageUrl?: string;
   episodes: ParsedEpisode[];

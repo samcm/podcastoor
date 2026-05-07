@@ -45,9 +45,15 @@ export function parseFeed(xml: string, feedUrl: string): ParsedFeed {
     xml,
     feedUrl,
     title: textOf(channel.title),
+    description: parseFeedDescription(channel),
     imageUrl: parseFeedImageUrl(channel, feedUrl),
     episodes
   };
+}
+
+function parseFeedDescription(channel: Record<string, unknown>): string | undefined {
+  const description = stripHtml(textOf(channel.description) || textOf(channel["itunes:summary"]));
+  return description || undefined;
 }
 
 function parseFeedImageUrl(channel: Record<string, unknown>, feedUrl: string): string | undefined {

@@ -37,9 +37,29 @@ const xml = `<?xml version="1.0" encoding="utf-8"?>
 </rss>`;
 
 describe("feed", () => {
+  it("parses top-level feed metadata for UI summaries", () => {
+    const parsed = parseFeed(
+      `<?xml version="1.0" encoding="utf-8"?>
+      <rss version="2.0">
+        <channel>
+          <title>Metadata Show</title>
+          <description><![CDATA[<p>Useful show notes for the whole podcast&rsquo;s feed.</p>]]></description>
+          <image><url>/cover.jpg</url></image>
+        </channel>
+      </rss>`,
+      "https://feeds.example.com/show.xml"
+    );
+
+    expect(parsed.title).toBe("Metadata Show");
+    expect(parsed.description).toBe("Useful show notes for the whole podcast's feed.");
+    expect(parsed.imageUrl).toBe("https://feeds.example.com/cover.jpg");
+    expect(parsed.episodes).toHaveLength(0);
+  });
+
   it("parses episodes and rewrites completed manifests to local assets", () => {
     const parsed = parseFeed(xml, "https://feeds.example.com/show.xml");
     expect(parsed.title).toBe("Sample Show");
+    expect(parsed.description).toBeUndefined();
     expect(parsed.imageUrl).toBe("https://cdn.example.com/art.jpg");
     expect(parsed.episodes[0].title).toBe("Sample Episode");
     expect(parsed.episodes[0].chapters).toHaveLength(2);
