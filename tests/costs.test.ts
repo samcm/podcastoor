@@ -23,7 +23,7 @@ test("cost summary groups spend by podcast, episode, model, and stage", async ()
   const summary = await summarizeCosts(config);
   expect(summary.actualUsd).toBe(0.3);
   expect(summary.byPodcast[0]).toMatchObject({ podcastSlug: "show", actualUsd: 0.3, episodes: 1 });
-  expect(summary.byModel.find((entry) => entry.model === "qwen/qwen3.6-flash")?.actualUsd).toBe(0.2);
+  expect(summary.byModel.find((entry) => entry.model === "qwen/qwen3.6-flash")).toMatchObject({ actualUsd: 0.2, entries: 1 });
   expect(summary.byStage.find((entry) => entry.stage === "transcription")?.actualUsd).toBe(0.1);
 });
 

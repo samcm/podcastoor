@@ -25,8 +25,8 @@ export interface CostSummary {
   byDay: Array<{ day: string; actualUsd: number; estimatedUsd: number; llmCalls: number; failures: number }>;
   byPodcast: Array<{ podcastSlug: string; actualUsd: number; estimatedUsd: number; llmCalls: number; episodes: number }>;
   byEpisode: Array<{ podcastSlug: string; episodeKey: string; actualUsd: number; estimatedUsd: number; llmCalls: number }>;
-  byModel: Array<{ model: string; actualUsd: number; calls: number }>;
-  byStage: Array<{ stage: string; actualUsd: number; calls: number }>;
+  byModel: Array<{ model: string; actualUsd: number; entries: number }>;
+  byStage: Array<{ stage: string; actualUsd: number; entries: number }>;
 }
 
 export function estimateEpisodeCost(podcast: EffectivePodcastConfig, transcript: Transcript | undefined, durationSeconds?: number): CostEstimate {
@@ -105,8 +105,8 @@ export async function summarizeCosts(config: AppConfig): Promise<CostSummary> {
   const byDay = new Map<string, { day: string; actualUsd: number; estimatedUsd: number; llmCalls: number; failures: number }>();
   const byPodcast = new Map<string, { podcastSlug: string; actualUsd: number; estimatedUsd: number; llmCalls: number; episodes: Set<string> }>();
   const byEpisode = new Map<string, { podcastSlug: string; episodeKey: string; actualUsd: number; estimatedUsd: number; llmCalls: number }>();
-  const byModel = new Map<string, { model: string; actualUsd: number; calls: number }>();
-  const byStage = new Map<string, { stage: string; actualUsd: number; calls: number }>();
+  const byModel = new Map<string, { model: string; actualUsd: number; entries: number }>();
+  const byStage = new Map<string, { stage: string; actualUsd: number; entries: number }>();
 
   for (const run of runs) {
     const day = run.at.slice(0, 10);
@@ -130,18 +130,30 @@ export async function summarizeCosts(config: AppConfig): Promise<CostSummary> {
     episodeEntry.llmCalls += run.llmCalls;
     byEpisode.set(episodeKey, episodeEntry);
 
+    let attributedActualUsd = 0;
     for (const note of run.notes ?? []) {
-      const model = /\bon\s+([^=|]+?)\s*(?:=|$)/i.exec(note)?.[1]?.trim() ?? "unknown";
-      const stage = /transcript/i.test(note) ? "transcription" : /ad-detection|chapter-generation|OpenRouter estimate/i.test(note) ? "text-llm" : "episode";
-      const noteCost = parseNoteCost(note);
-      const modelEntry = byModel.get(model) ?? { model, actualUsd: 0, calls: 0 };
-      modelEntry.actualUsd += noteCost;
-      modelEntry.calls += run.llmCalls || 1;
-      byModel.set(model, modelEntry);
-      const stageEntry = byStage.get(stage) ?? { stage, actualUsd: 0, calls: 0 };
-      stageEntry.actualUsd += noteCost;
-      stageEntry.calls += run.llmCalls || 1;
-      byStage.set(stage, stageEntry);
+      const parsed = parseActualCostNote(note);
+      if (!parsed) continue;
+      attributedActualUsd += parsed.actualUsd;
+      const modelEntry = byModel.get(parsed.model) ?? { model: parsed.model, actualUsd: 0, entries: 0 };
+      modelEntry.actualUsd += parsed.actualUsd;
+      modelEntry.entries += 1;
+      byModel.set(parsed.model, modelEntry);
+      const stageEntry = byStage.get(parsed.stage) ?? { stage: parsed.stage, actualUsd: 0, entries: 0 };
+      stageEntry.actualUsd += parsed.actualUsd;
+      stageEntry.entries += 1;
+      byStage.set(parsed.stage, stageEntry);
+    }
+    const unattributedActualUsd = Number((run.actualUsd - attributedActualUsd).toFixed(6));
+    if (unattributedActualUsd > 0.000001) {
+      const modelEntry = byModel.get("unattributed legacy") ?? { model: "unattributed legacy", actualUsd: 0, entries: 0 };
+      modelEntry.actualUsd += unattributedActualUsd;
+      modelEntry.entries += 1;
+      byModel.set(modelEntry.model, modelEntry);
+      const stageEntry = byStage.get("unattributed") ?? { stage: "unattributed", actualUsd: 0, entries: 0 };
+      stageEntry.actualUsd += unattributedActualUsd;
+      stageEntry.entries += 1;
+      byStage.set(stageEntry.stage, stageEntry);
     }
   }
 
@@ -163,9 +175,16 @@ export async function summarizeCosts(config: AppConfig): Promise<CostSummary> {
   };
 }
 
-function parseNoteCost(note: string): number {
-  const match = /\$([0-9]+(?:\.[0-9]+)?)/.exec(note);
-  return match ? Number(match[1]) : 0;
+function parseActualCostNote(note: string): { stage: string; model: string; actualUsd: number } | undefined {
+  if (!/\bactual:/i.test(note)) return undefined;
+  const match = /\b(transcript|ad-detection|chapter-generation)\s+actual:[\s\S]*?\bon\s+([^=|]+?)\s*=\s*\$([0-9]+(?:\.[0-9]+)?)/i.exec(note);
+  if (!match) return undefined;
+  const purpose = match[1].toLowerCase();
+  return {
+    stage: purpose === "transcript" ? "transcription" : "text-llm",
+    model: match[2].trim(),
+    actualUsd: Number(match[3])
+  };
 }
 
 function roundCostRow<T extends Record<string, unknown>>(row: T): T {

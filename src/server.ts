@@ -795,8 +795,8 @@ function renderCostDashboard(costs: CostSummary): string {
     </section>
     ${renderCostTable("By Podcast", costs.byPodcast, ["podcastSlug", "actualUsd", "estimatedUsd", "llmCalls", "episodes"])}
     ${renderCostTable("By Day", costs.byDay, ["day", "actualUsd", "estimatedUsd", "llmCalls", "failures"])}
-    ${renderCostTable("By Model", costs.byModel, ["model", "actualUsd", "calls"])}
-    ${renderCostTable("By Stage", costs.byStage, ["stage", "actualUsd", "calls"])}
+    ${renderCostTable("By Model", costs.byModel, ["model", "actualUsd", "entries"])}
+    ${renderCostTable("By Stage", costs.byStage, ["stage", "actualUsd", "entries"])}
     ${renderCostTable("Top Episodes", costs.byEpisode, ["podcastSlug", "episodeKey", "actualUsd", "estimatedUsd", "llmCalls"])}`
   );
 }
