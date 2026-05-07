@@ -159,9 +159,25 @@ export function buildServer(config: AppConfig) {
   });
 
   app.get("/feeds/:podcastSlug.xml", async (request, reply) => {
-    const { podcastSlug } = request.params as { podcastSlug: string };
+    const { podcastSlug: rawPodcastSlug } = request.params as { podcastSlug: string };
+    const feedRequest = resolveFeedRequest(config, rawPodcastSlug);
+    if (!feedRequest) {
+      reply.code(404);
+      return { error: "podcast not found" };
+    }
     reply.type("application/rss+xml; charset=utf-8");
-    return getRewrittenFeed(config, podcastSlug);
+    return getRewrittenFeed(config, feedRequest.podcastSlug, feedRequest);
+  });
+
+  app.get("/feeds/:podcastSlug/:variant.xml", async (request, reply) => {
+    const { podcastSlug, variant } = request.params as { podcastSlug: string; variant: string };
+    const feedRequest = resolveFeedRequest(config, podcastSlug, variant);
+    if (!feedRequest) {
+      reply.code(404);
+      return { error: "podcast not found" };
+    }
+    reply.type("application/rss+xml; charset=utf-8");
+    return getRewrittenFeed(config, feedRequest.podcastSlug, feedRequest);
   });
 
   app.get("/audio/:podcastSlug/:episodeKey/episode.mp3", async (request, reply) => {
@@ -296,27 +312,73 @@ async function sendAudioFile(request: FastifyRequest, reply: FastifyReply, fileP
   return reply.send(createReadStream(filePath, { start, end }));
 }
 
-async function getRewrittenFeed(config: AppConfig, podcastSlug: string): Promise<string> {
+interface FeedRequest {
+  podcastSlug: string;
+  feedPath: string;
+  identityKey: string;
+}
+
+function resolveFeedRequest(config: AppConfig, rawPodcastSlug: string, rawVariant?: string): FeedRequest | undefined {
+  if (rawVariant != null) {
+    if (!config.podcasts[rawPodcastSlug]) return undefined;
+    const variant = sanitizeFeedVariant(rawVariant);
+    if (!variant) return undefined;
+    return {
+      podcastSlug: rawPodcastSlug,
+      feedPath: `/feeds/${rawPodcastSlug}/${variant}.xml`,
+      identityKey: `${rawPodcastSlug}:${variant}`
+    };
+  }
+
+  if (config.podcasts[rawPodcastSlug]) {
+    return {
+      podcastSlug: rawPodcastSlug,
+      feedPath: `/feeds/${rawPodcastSlug}.xml`,
+      identityKey: rawPodcastSlug
+    };
+  }
+
+  const suffix = "-ad-free";
+  if (rawPodcastSlug.endsWith(suffix)) {
+    const podcastSlug = rawPodcastSlug.slice(0, -suffix.length);
+    if (config.podcasts[podcastSlug]) {
+      return {
+        podcastSlug,
+        feedPath: `/feeds/${rawPodcastSlug}.xml`,
+        identityKey: rawPodcastSlug
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function sanitizeFeedVariant(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+}
+
+async function getRewrittenFeed(config: AppConfig, podcastSlug: string, feedRequest: FeedRequest): Promise<string> {
   const now = Date.now();
-  const cached = feedCache.get(podcastSlug);
+  const cacheKey = feedRequest.identityKey;
+  const cached = feedCache.get(cacheKey);
   if (cached?.value && cached.expiresAt > now) return cached.value;
   if (cached?.pending) return cached.pending;
 
-  const pending = buildRewrittenFeed(config, podcastSlug).then(
+  const pending = buildRewrittenFeed(config, podcastSlug, feedRequest).then(
     (value) => {
-      feedCache.set(podcastSlug, { value, expiresAt: Date.now() + FEED_CACHE_MS });
+      feedCache.set(cacheKey, { value, expiresAt: Date.now() + FEED_CACHE_MS });
       return value;
     },
     (error) => {
-      feedCache.delete(podcastSlug);
+      feedCache.delete(cacheKey);
       throw error;
     }
   );
-  feedCache.set(podcastSlug, { pending, expiresAt: now + FEED_CACHE_MS });
+  feedCache.set(cacheKey, { pending, expiresAt: now + FEED_CACHE_MS });
   return pending;
 }
 
-async function buildRewrittenFeed(config: AppConfig, podcastSlug: string): Promise<string> {
+async function buildRewrittenFeed(config: AppConfig, podcastSlug: string, feedRequest: FeedRequest): Promise<string> {
   const podcast = resolvePodcastConfig(config, podcastSlug);
   const xml = await fetchFeed(podcast.feedUrl);
   const parsed = parseFeed(xml, podcast.feedUrl);
@@ -331,7 +393,9 @@ async function buildRewrittenFeed(config: AppConfig, podcastSlug: string): Promi
     podcastSlug,
     manifests,
     pipelineVersion: PIPELINE_VERSION,
-    artworkUrl
+    artworkUrl,
+    feedPath: feedRequest.feedPath,
+    identityKey: feedRequest.identityKey
   });
 }
 
@@ -368,7 +432,7 @@ function renderPodcastList(
                 <td>${escapeHtml(podcast.transcriptionModel)}</td>
                 <td>${escapeHtml(podcast.classifierModel)}</td>
                 <td>${podcast.latestEpisode ? escapeHtml(podcast.latestEpisode.title) : "None yet"}</td>
-                <td><a href="/feeds/${podcast.slug}.xml">RSS</a></td>
+                <td><a href="/feeds/${podcast.slug}.xml">RSS</a> · <a href="/feeds/${podcast.slug}/ad-free.xml">Alt</a></td>
               </tr>`
             )
             .join("")}
@@ -474,6 +538,7 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
     ${renderPodcastOverview(deepDive)}
     <section class="panel meta">
       <div><span>Subscription URL</span><code>${escapeHtml(deepDive.subscriptionUrl)}</code></div>
+      <div><span>Alternate URL</span><code>${escapeHtml(deepDive.alternateSubscriptionUrl)}</code></div>
       <div><span>Lookback</span><strong>${deepDive.lookbackDays} days</strong></div>
       <div><span>Automation</span><strong>${automation.running ? "running" : "idle"} · every ${deepDive.config.automation.intervalMinutes} min</strong></div>
       <div><span>Confidence</span><strong>${deepDive.config.effectiveProcessing.confidenceThreshold}</strong></div>
@@ -544,7 +609,7 @@ function renderPodcastOverview(deepDive: DeepDive): string {
     <div class="podcast-overview-body">
       <div class="section-head">
         <h2>${escapeHtml(title)}</h2>
-        <a href="/feeds/${deepDive.slug}.xml">RSS</a>
+        <span><a href="/feeds/${deepDive.slug}.xml">RSS</a> · <a href="/feeds/${deepDive.slug}/ad-free.xml">Alt RSS</a></span>
       </div>
       <p>${escapeHtml(description)}</p>
       <div class="overview-stats">

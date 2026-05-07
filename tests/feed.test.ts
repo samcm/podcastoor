@@ -8,6 +8,8 @@ const xml = `<?xml version="1.0" encoding="utf-8"?>
     <title>Sample Show</title>
     <atom:link rel="self" type="application/rss+xml" href="https://feeds.example.com/show.xml"/>
     <itunes:new-feed-url>https://feeds.example.com/show.xml</itunes:new-feed-url>
+    <podcast:guid>11111111-1111-4111-8111-111111111111</podcast:guid>
+    <acast:showId>upstream-show</acast:showId>
     <image>
       <url>https://cdn.example.com/art.jpg</url>
       <title>Sample Show</title>
@@ -16,6 +18,7 @@ const xml = `<?xml version="1.0" encoding="utf-8"?>
       <title>Sample Episode</title>
       <description>Original episode notes.</description>
       <guid isPermaLink="false">episode-1</guid>
+      <acast:episodeId>upstream-episode</acast:episodeId>
       <pubDate>Tue, 05 May 2026 01:00:00 GMT</pubDate>
       <itunes:duration>1:00:00</itunes:duration>
       <enclosure url="https://cdn.example.com/episode.mp3" length="1234" type="audio/mpeg"/>
@@ -90,14 +93,22 @@ describe("feed", () => {
       podcastSlug: "sample",
       manifests: new Map([[parsed.episodes[0].key, manifest]]),
       pipelineVersion: "test",
-      artworkUrl: "http://localhost:3729/assets/sample/artwork.png?v=1"
+      artworkUrl: "http://localhost:3729/assets/sample/artwork.png?v=1",
+      feedPath: "/feeds/sample/ad-free.xml",
+      identityKey: "sample:ad-free"
     });
 
     expect(rewritten).toContain("http://localhost:3729/audio/sample/");
     expect(rewritten).toContain("http://localhost:3729/assets/sample/");
     expect(rewritten).toContain("<title>Sample Show (Ad Free)</title>");
-    expect(rewritten).toContain('href="http://localhost:3729/feeds/sample.xml"');
-    expect(rewritten).toContain("<itunes:new-feed-url>http://localhost:3729/feeds/sample.xml</itunes:new-feed-url>");
+    expect(rewritten).toContain('href="http://localhost:3729/feeds/sample/ad-free.xml"');
+    expect(rewritten).toContain("<itunes:new-feed-url>http://localhost:3729/feeds/sample/ad-free.xml</itunes:new-feed-url>");
+    expect(rewritten).toContain("<podcast:guid>");
+    expect(rewritten).not.toContain("11111111-1111-4111-8111-111111111111");
+    expect(rewritten).toContain(`podcastoor:sample:ad-free:${parsed.episodes[0].key}`);
+    expect(rewritten).not.toContain("episode-1</guid>");
+    expect(rewritten).not.toContain("acast:showId");
+    expect(rewritten).not.toContain("acast:episodeId");
     expect(rewritten).toContain("<title>Sample Show (Ad Free)</title>");
     expect(rewritten).toContain("<url>http://localhost:3729/assets/sample/artwork.png?v=1</url>");
     expect(rewritten).toContain('href="http://localhost:3729/assets/sample/artwork.png?v=1"');

@@ -132,7 +132,15 @@ function parsePscChapters(item: Record<string, unknown>): Chapter[] {
 
 export function rewriteFeed(
   parsed: ParsedFeed,
-  options: { publicBaseUrl: string; podcastSlug: string; manifests: Map<string, EpisodeManifest>; pipelineVersion?: string; artworkUrl?: string }
+  options: {
+    publicBaseUrl: string;
+    podcastSlug: string;
+    manifests: Map<string, EpisodeManifest>;
+    pipelineVersion?: string;
+    artworkUrl?: string;
+    feedPath?: string;
+    identityKey?: string;
+  }
 ): string {
   const doc = structuredClone(parsed.rawDoc) as Record<string, unknown>;
   delete doc["?xml"];
@@ -140,24 +148,30 @@ export function rewriteFeed(
   rss["@_xmlns:podcast"] ||= "https://podcastindex.org/namespace/1.0";
   rss["@_xmlns:psc"] ||= "http://podlove.org/simple-chapters";
   const channel = getRecord(rss.channel);
+  const rawItems = channel.item;
+  delete channel.item;
   channel.generator = "podcast-proxy-v1";
   const channelTitle = textOf(channel["itunes:title"]) || textOf(channel.title) || parsed.title;
   const adFreeChannelTitle = withAdFreeSuffix(channelTitle || options.podcastSlug);
   channel.title = adFreeChannelTitle;
   if (channel["itunes:title"] || channelTitle) channel["itunes:title"] = adFreeChannelTitle;
-  const proxyFeedUrl = absoluteUrl(options.publicBaseUrl, `/feeds/${options.podcastSlug}.xml`);
+  const identityKey = options.identityKey ?? options.podcastSlug;
+  const proxyFeedUrl = absoluteUrl(options.publicBaseUrl, options.feedPath ?? `/feeds/${options.podcastSlug}.xml`);
   channel["itunes:new-feed-url"] = proxyFeedUrl;
+  channel["podcast:guid"] = deterministicUuid(`podcastoor:${identityKey}`);
+  channel.link = absoluteUrl(options.publicBaseUrl, `/podcasts/${options.podcastSlug}`);
+  removeProviderIdentityTags(channel);
   rewriteImageTitle(channel, adFreeChannelTitle);
   if (options.artworkUrl) rewriteArtworkUrl(channel, options.artworkUrl, adFreeChannelTitle);
   rewriteSelfLink(channel, proxyFeedUrl);
 
-  const items = asArray(channel.item)
+  const items = asArray(rawItems)
     .map((rawItem, index) => {
       const episode = parsed.episodes[index];
       if (!episode) return undefined;
       const manifest = options.manifests.get(episode.key);
       if (!isPublishableManifest(episode, manifest, options.pipelineVersion)) return undefined;
-      return rewriteEpisodeItem(getRecord(rawItem), episode.key, options, manifest);
+      return rewriteEpisodeItem(getRecord(rawItem), episode.key, { ...options, identityKey }, manifest);
     })
     .filter((item): item is Record<string, unknown> => Boolean(item));
   channel.item = items;
@@ -211,7 +225,7 @@ function rewriteArtworkUrl(channel: Record<string, unknown>, artworkUrl: string,
 function rewriteEpisodeItem(
   item: Record<string, unknown>,
   episodeKeyValue: string,
-  options: { publicBaseUrl: string; podcastSlug: string; artworkUrl?: string },
+  options: { publicBaseUrl: string; podcastSlug: string; artworkUrl?: string; identityKey: string },
   manifest: EpisodeManifest
 ): Record<string, unknown> {
   const version = assetVersion(manifest);
@@ -222,6 +236,12 @@ function rewriteEpisodeItem(
   const adFreeTitle = withAdFreeSuffix(title);
   item.title = adFreeTitle;
   item["itunes:title"] = adFreeTitle;
+  item.guid = {
+    "@_isPermaLink": "false",
+    "#text": `podcastoor:${options.identityKey}:${episodeKeyValue}`
+  };
+  item.link = absoluteUrl(options.publicBaseUrl, `/podcasts/${options.podcastSlug}#${episodeKeyValue}`);
+  removeProviderIdentityTags(item);
   if (options.artworkUrl) {
     const episodeImage = getRecord(item["itunes:image"]);
     episodeImage["@_href"] = options.artworkUrl;
@@ -277,12 +297,31 @@ function rewriteEpisodeItem(
   return item;
 }
 
+function removeProviderIdentityTags(record: Record<string, unknown>): void {
+  for (const key of Object.keys(record)) {
+    if (/^(acast|omny|megaphone|art19|podtrac|podaccess):/i.test(key)) {
+      delete record[key];
+    }
+  }
+}
+
 function assetVersion(manifest: EpisodeManifest): string {
   return encodeURIComponent(`${manifest.pipelineVersion}-${manifest.generatedAt}`);
 }
 
 function withAdFreeSuffix(title: string): string {
   return /\(ad free\)$/i.test(title.trim()) ? title : `${title} (Ad Free)`;
+}
+
+function deterministicUuid(seed: string): string {
+  const hex = sha1(seed).slice(0, 32).padEnd(32, "0");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `5${hex.slice(13, 16)}`,
+    `${((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0")}${hex.slice(18, 20)}`,
+    hex.slice(20, 32)
+  ].join("-");
 }
 
 function appendProxyMetadata(item: Record<string, unknown>, manifest: EpisodeManifest): void {

@@ -15,6 +15,7 @@ export interface PodcastSummary {
   name: string;
   feedUrl: string;
   subscriptionUrl: string;
+  alternateSubscriptionUrl: string;
   manifestCount: number;
   processedCount: number;
   dryRunCount: number;
@@ -38,6 +39,7 @@ export async function listPodcastSummaries(config: AppConfig): Promise<PodcastSu
         name: podcast.name,
         feedUrl: podcast.feedUrl,
         subscriptionUrl: `${config.server.publicBaseUrl}/feeds/${slug}.xml`,
+        alternateSubscriptionUrl: `${config.server.publicBaseUrl}/feeds/${slug}/ad-free.xml`,
         manifestCount: manifests.length,
         processedCount: manifests.filter((manifest) => manifest.audio.status === "completed").length,
         dryRunCount: manifests.filter((manifest) => manifest.audio.status === "dry-run").length,
@@ -84,6 +86,7 @@ export async function getPodcastDeepDive(config: AppConfig, slug: string) {
     name: podcast.name,
     feedUrl: podcast.feedUrl,
     subscriptionUrl: `${config.server.publicBaseUrl}/feeds/${slug}.xml`,
+    alternateSubscriptionUrl: `${config.server.publicBaseUrl}/feeds/${slug}/ad-free.xml`,
     lookbackDays: podcast.lookbackDays ?? config.processing.lookbackDays,
     metadata: {
       feedTitle: feedMetadata.title,
