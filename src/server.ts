@@ -436,7 +436,7 @@ function renderPodcastList(
       <p>${automation.running ? "Processing is running" : "Processing is idle"}${automation.lastFinishedAt ? ` · last finished ${renderLocalTime(automation.lastFinishedAt)}` : ""}</p>
       <p>Autonomous mode is enabled when configured: process on startup, then repeat on the configured interval. <a href="/costs">Cost dashboard</a></p>
     </header>
-    <main class="panel">
+    <main class="panel table-panel podcast-list">
       <table>
         <thead><tr><th>Podcast</th><th>Manifests</th><th>Rendered</th><th>Transcription</th><th>Classifier</th><th>Latest</th><th>Feed</th></tr></thead>
         <tbody>
@@ -491,7 +491,9 @@ function renderControlPanel(podcasts: Awaited<ReturnType<typeof listPodcastSumma
     <form data-admin-action="tuning">
       <input type="hidden" name="scope" value="global">
       <label>Confidence <input name="confidenceThreshold" type="number" min="0" max="1" step="0.01"></label>
-      <label>Cut padding <input name="paddingSeconds" type="number" min="0" max="10" step="0.1"></label>
+      <label>Fallback padding <input name="paddingSeconds" type="number" min="0" max="10" step="0.1"></label>
+      <label>Before cut <input name="prePaddingSeconds" type="number" min="0" max="10" step="0.1"></label>
+      <label>After cut <input name="postPaddingSeconds" type="number" min="0" max="10" step="0.1"></label>
       <label>Min cut <input name="minSegmentSeconds" type="number" min="0" max="120" step="0.5"></label>
       <label>Max cut <input name="maxSegmentSeconds" type="number" min="1" max="1200" step="1"></label>
       <label><input name="markerToneEnabled" type="checkbox"> Marker tone</label>
@@ -559,7 +561,7 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
       <div><span>Lookback</span><strong>${deepDive.lookbackDays} days</strong></div>
       <div><span>Automation</span><strong>${automation.running ? "running" : "idle"} · every ${deepDive.config.automation.intervalMinutes} min</strong></div>
       <div><span>Confidence</span><strong>${deepDive.config.effectiveProcessing.confidenceThreshold}</strong></div>
-      <div><span>Cut Padding</span><strong>${deepDive.config.detection.paddingSeconds}s</strong></div>
+      <div><span>Cut Padding</span><strong>${deepDive.config.detection.prePaddingSeconds}s before · ${deepDive.config.detection.postPaddingSeconds}s after</strong></div>
       <div><span>Cut Limits</span><strong>${deepDive.config.detection.minSegmentSeconds}s-${deepDive.config.detection.maxSegmentSeconds}s</strong></div>
       <div><span>Marker Tone</span><strong>${deepDive.config.audio.jingle.enabled ? "enabled" : "disabled"}</strong></div>
       <div><span>Model</span><strong>${escapeHtml(deepDive.config.llm.enabled ? deepDive.config.llm.model : "disabled")}</strong></div>
@@ -660,7 +662,9 @@ function renderPodcastControls(deepDive: DeepDive): string {
       <input type="hidden" name="scope" value="podcast">
       <input type="hidden" name="podcastSlug" value="${escapeHtml(deepDive.slug)}">
       <label>Confidence <input name="confidenceThreshold" type="number" min="0" max="1" step="0.01" value="${deepDive.config.effectiveProcessing.confidenceThreshold}"></label>
-      <label>Cut padding <input name="paddingSeconds" type="number" min="0" max="10" step="0.1" value="${deepDive.config.detection.paddingSeconds}"></label>
+      <label>Fallback padding <input name="paddingSeconds" type="number" min="0" max="10" step="0.1" value="${deepDive.config.detection.paddingSeconds}"></label>
+      <label>Before cut <input name="prePaddingSeconds" type="number" min="0" max="10" step="0.1" value="${deepDive.config.detection.prePaddingSeconds}"></label>
+      <label>After cut <input name="postPaddingSeconds" type="number" min="0" max="10" step="0.1" value="${deepDive.config.detection.postPaddingSeconds}"></label>
       <label>Min cut <input name="minSegmentSeconds" type="number" min="0" max="120" step="0.5" value="${deepDive.config.detection.minSegmentSeconds}"></label>
       <label>Max cut <input name="maxSegmentSeconds" type="number" min="1" max="1200" step="1" value="${deepDive.config.detection.maxSegmentSeconds}"></label>
       <label><input name="markerToneEnabled" type="checkbox" ${deepDive.config.audio.jingle.enabled ? "checked" : ""}> Marker tone</label>
@@ -945,16 +949,20 @@ function page(title: string, body: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)}</title>
   <style>
-    :root { color-scheme: light; --ink:#1f2933; --muted:#607080; --line:#d8dee6; --bg:#f6f8fa; --panel:#fff; --accent:#0f766e; }
+    :root { color-scheme: light; --ink:#1d2733; --muted:#5e6f80; --line:#d9e1e8; --bg:#f5f7f9; --panel:#fff; --accent:#0f766e; --accent-soft:#e7f4f1; --shadow:0 10px 30px rgba(29,39,51,.06); }
+    * { box-sizing:border-box; }
     body { margin:0; font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
-    header, main, section { max-width:1120px; margin:0 auto; padding:24px; }
-    h1 { margin:0 0 6px; font-size:28px; font-weight:700; }
+    body > header, body > main, body > section { width:min(1120px, calc(100% - 32px)); margin:0 auto; padding:24px; }
+    header { padding-top:28px; padding-bottom:16px; }
+    header p { margin:6px 0 0; color:var(--muted); }
+    h1 { margin:0 0 6px; font-size:28px; line-height:1.14; font-weight:700; }
     h2 { margin:0; font-size:17px; }
     h3 { margin:16px 0 6px; font-size:13px; text-transform:uppercase; color:var(--muted); }
     a { color:var(--accent); text-decoration:none; }
-    .panel, .episode { background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+    .panel, .episode { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
     .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .section-head h2 { font-size:16px; }
+    .table-panel { overflow-x:auto; }
     table { width:100%; border-collapse:collapse; }
     th, td { padding:11px 10px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
     th { color:var(--muted); font-size:12px; text-transform:uppercase; }
@@ -974,9 +982,9 @@ function page(title: string, body: string): string {
     .controls { margin:0 auto 14px; display:grid; gap:12px; }
     .controls form, .inline-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
     .controls label { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px; text-transform:uppercase; }
-    .controls input, .controls select { min-height:30px; border:1px solid var(--line); border-radius:5px; padding:4px 7px; background:#fff; color:var(--ink); }
+    .controls input, .controls select { min-height:34px; border:1px solid var(--line); border-radius:5px; padding:5px 8px; background:#fff; color:var(--ink); }
     .controls label:has(input[type="checkbox"]) { flex-direction:row; align-items:center; text-transform:none; color:var(--ink); }
-    .controls button, .inline-controls button { border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--accent); padding:6px 10px; cursor:pointer; }
+    .controls button, .inline-controls button { min-height:34px; border:1px solid rgba(15,118,110,.35); border-radius:5px; background:var(--accent-soft); color:#115e59; padding:6px 10px; cursor:pointer; }
     .inline-controls { margin-top:12px; }
     .artifact-links { padding:0; margin-top:12px; display:flex; flex-wrap:wrap; gap:10px; }
     .artifact-links a { border:1px solid var(--line); border-radius:5px; background:#fff; padding:4px 8px; }
@@ -987,10 +995,12 @@ function page(title: string, body: string): string {
     dl { display:grid; grid-template-columns:130px 1fr; gap:6px 12px; margin:14px 0 0; }
     dd { margin:0; min-width:0; overflow-wrap:anywhere; }
     ul, ol { margin:0; padding-left:20px; }
+    .podcast-list table { min-width:820px; }
     .queue { margin:0 auto 14px; overflow-x:auto; }
     .queue table { min-width:980px; font-size:12px; }
     .queue code { color:var(--muted); }
     .cost-table { margin:14px auto; overflow-x:auto; }
+    .cost-table table { min-width:680px; }
     .state { display:inline-flex; border:1px solid var(--line); border-radius:999px; padding:2px 7px; color:var(--muted); background:#fff; }
     .state.running, .state.queued { border-color:rgba(15,118,110,.35); color:#115e59; background:rgba(15,118,110,.08); }
     .state.completed { border-color:rgba(22,163,74,.35); color:#166534; background:rgba(22,163,74,.08); }
@@ -1024,16 +1034,16 @@ function page(title: string, body: string): string {
     .legend .blue { background:rgba(37,99,235,.85); }
     .cut-list { display:grid; gap:8px; margin:10px 0 0; padding-left:0; list-style:none; }
     .cut-list li { display:grid; grid-template-columns:auto auto 1fr auto; gap:8px; align-items:center; padding:8px; border:1px solid var(--line); border-radius:6px; background:#fafafa; }
-    .cut-list button, .transcript button, .audit-table button { border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--accent); padding:3px 7px; cursor:pointer; }
+    .cut-list button, .transcript button, .audit-table button { min-height:30px; border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--accent); padding:3px 7px; cursor:pointer; }
     .cut-list small { color:var(--muted); white-space:nowrap; }
-    .audit-table { padding:0; margin-top:14px; }
-    .audit-table table { font-size:12px; }
+    .audit-table { padding:0; margin-top:14px; overflow-x:auto; }
+    .audit-table table { min-width:900px; font-size:12px; }
     .audit-table th, .audit-table td { padding:8px 10px; }
     .audit-table td:first-child, .audit-table td:nth-child(2), .audit-table td:nth-child(3), .audit-table td:nth-child(4), .audit-table td:nth-child(5), .audit-table td:nth-child(6) { white-space:nowrap; }
     .transcript-wrap { padding:0; margin-top:16px; }
-    details.transcript { margin-top:10px; border-top:1px solid var(--line); padding-top:12px; }
+    details.transcript { margin-top:10px; border-top:1px solid var(--line); padding-top:12px; overflow-x:auto; }
     summary { cursor:pointer; color:var(--accent); font-weight:600; }
-    .transcript table { margin-top:10px; font-size:12px; }
+    .transcript table { min-width:880px; margin-top:10px; font-size:12px; }
     .transcript td:first-child, .transcript td:nth-child(2), .transcript td:nth-child(3) { white-space:nowrap; color:var(--muted); width:74px; }
     .removed-row td { background:rgba(220,38,38,.08); }
     .removed-row td:last-child { text-decoration:line-through; color:#7f1d1d; }
@@ -1042,8 +1052,21 @@ function page(title: string, body: string): string {
     .pill.danger { border-color:rgba(220,38,38,.35); color:#991b1b; background:rgba(220,38,38,.08); }
     .pill.warn { border-color:rgba(217,119,6,.35); color:#92400e; background:rgba(245,158,11,.10); }
     @media (max-width: 760px) {
+      body > header, body > main, body > section { width:calc(100% - 20px); padding:16px; }
+      header { padding-top:20px; }
+      h1 { font-size:24px; }
+      .section-head { align-items:flex-start; flex-direction:column; }
+      .controls form, .inline-controls { display:grid; grid-template-columns:1fr; align-items:stretch; }
+      .controls label, .controls input, .controls select, .controls button, .inline-controls button { width:100%; min-height:42px; }
+      .meta { grid-template-columns:1fr; gap:10px; }
       .podcast-overview { grid-template-columns:1fr; }
       .podcast-art { width:min(180px, 100%); }
+      .episode { padding:16px; }
+      .episode-head { flex-direction:column; }
+      dl { grid-template-columns:1fr; gap:3px 0; }
+      dd { margin-bottom:8px; }
+      .compare { grid-template-columns:1fr; padding-left:0; padding-right:0; width:100%; }
+      .timeline-head { align-items:flex-start; flex-direction:column; }
       .activity li { grid-template-columns:1fr; }
       .cut-list li { grid-template-columns:1fr 1fr; }
       .cut-list span, .cut-list small { grid-column:1 / -1; }
@@ -1237,15 +1260,19 @@ function parseScope(value: unknown): ManualReprocessScope | undefined {
 function parseTuning(body: Record<string, unknown>): RuntimeTuning {
   const confidenceThreshold = numberValue(body.confidenceThreshold);
   const paddingSeconds = numberValue(body.paddingSeconds);
+  const prePaddingSeconds = numberValue(body.prePaddingSeconds);
+  const postPaddingSeconds = numberValue(body.postPaddingSeconds);
   const minSegmentSeconds = numberValue(body.minSegmentSeconds);
   const maxSegmentSeconds = numberValue(body.maxSegmentSeconds);
   const markerToneEnabled = boolValue(body.markerToneEnabled);
   return {
     ...(confidenceThreshold != null ? { processing: { confidenceThreshold } } : {}),
-    ...(paddingSeconds != null || minSegmentSeconds != null || maxSegmentSeconds != null
+    ...(paddingSeconds != null || prePaddingSeconds != null || postPaddingSeconds != null || minSegmentSeconds != null || maxSegmentSeconds != null
       ? {
           detection: {
             ...(paddingSeconds != null ? { paddingSeconds } : {}),
+            ...(prePaddingSeconds != null ? { prePaddingSeconds } : {}),
+            ...(postPaddingSeconds != null ? { postPaddingSeconds } : {}),
             ...(minSegmentSeconds != null ? { minSegmentSeconds } : {}),
             ...(maxSegmentSeconds != null ? { maxSegmentSeconds } : {})
           }
@@ -1294,6 +1321,8 @@ function actualRemovalWindows(
   return normalizeSegments(removalSegments(episode.decisions, config.processing.confidenceThreshold), {
     durationSeconds: duration,
     paddingSeconds: config.detection.paddingSeconds,
+    prePaddingSeconds: config.detection.prePaddingSeconds,
+    postPaddingSeconds: config.detection.postPaddingSeconds,
     minSegmentSeconds: config.detection.minSegmentSeconds,
     maxSegmentSeconds: config.detection.maxSegmentSeconds
   });

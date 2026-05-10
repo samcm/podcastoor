@@ -114,6 +114,8 @@ data/config/runtime-overrides.json
 
 They can adjust global or per-podcast confidence threshold, cut padding, minimum/maximum cut duration, and marker tone enablement for future processing and forced reprocesses.
 
+Cut padding is split into before/after controls. The default is conservative around starts: `prePaddingSeconds: 0` and `postPaddingSeconds: 0.4`, so uncertain boundaries leave a small ad remnant instead of chopping editorial audio before the detected ad.
+
 ## Real Audio Processing
 
 The server processes automatically on startup and then on the configured interval. The standalone process command is still useful for testing or forcing a single podcast:
@@ -187,6 +189,8 @@ The current best path with the available key is:
 - ffmpeg: cuts timestamped windows with an accurate one-pass filter render, then encodes once at at least the configured/source bitrate and inserts the marker tone.
 
 OpenRouter's dedicated STT endpoint currently returns text plus usage rather than native word timestamps, so the app uses OpenRouter audio-chat transcription by default and asks the audio model for strict timestamped JSON segments. Those timestamps are still model-generated, not forced-alignment timestamps. OpenRouter chat responses include `usage.cost`; the app records that exact model-call cost when present and only falls back to token-price estimates for preflight budgeting.
+
+Timestamp precision notes and the proposed forced-alignment upgrade path are tracked in [`docs/timestamp-precision.md`](docs/timestamp-precision.md).
 
 ## Data Layout
 

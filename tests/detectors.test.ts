@@ -4,6 +4,8 @@ import type { DetectionConfig, ParsedEpisode, Transcript } from "../src/types.js
 
 const config: DetectionConfig = {
   paddingSeconds: 0.5,
+  prePaddingSeconds: 0,
+  postPaddingSeconds: 0.4,
   minSegmentSeconds: 5,
   maxSegmentSeconds: 120
 };

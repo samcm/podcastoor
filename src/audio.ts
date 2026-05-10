@@ -66,6 +66,8 @@ export async function renderEpisodeAudio(params: {
     const removed = normalizeSegments(rawRemoved, {
       durationSeconds: params.originalDurationSeconds,
       paddingSeconds: params.detection.paddingSeconds,
+      prePaddingSeconds: params.detection.prePaddingSeconds,
+      postPaddingSeconds: params.detection.postPaddingSeconds,
       minSegmentSeconds: params.detection.minSegmentSeconds,
       maxSegmentSeconds: params.detection.maxSegmentSeconds
     });
@@ -90,6 +92,8 @@ export async function renderEpisodeAudio(params: {
   const removed = normalizeSegments(rawRemoved, {
     durationSeconds: sourceDuration,
     paddingSeconds: params.detection.paddingSeconds,
+    prePaddingSeconds: params.detection.prePaddingSeconds,
+    postPaddingSeconds: params.detection.postPaddingSeconds,
     minSegmentSeconds: params.detection.minSegmentSeconds,
     maxSegmentSeconds: params.detection.maxSegmentSeconds
   });

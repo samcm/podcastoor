@@ -23,7 +23,7 @@ retry:
 admin:
   token: ""
 costs:
-  monthlyBudgetUsd: 10
+  monthlyBudgetUsd: 50
   perRunBudgetUsd: 1
   transcribeMaxMinutesPerRun: 180
   llmMaxInputTokensPerRun: 250000
@@ -75,6 +75,8 @@ llm:
   maxTranscriptChars: 180000
 detection:
   paddingSeconds: 0.6
+  prePaddingSeconds: 0
+  postPaddingSeconds: 0.4
   minSegmentSeconds: 8
   maxSegmentSeconds: 240
 categories:

@@ -13,14 +13,22 @@ export function removalSegments(decisions: SegmentDecision[], confidenceThreshol
 
 export function normalizeSegments(
   segments: Segment[],
-  options: { durationSeconds?: number; paddingSeconds?: number; minSegmentSeconds?: number; maxSegmentSeconds?: number } = {}
+  options: {
+    durationSeconds?: number;
+    paddingSeconds?: number;
+    prePaddingSeconds?: number;
+    postPaddingSeconds?: number;
+    minSegmentSeconds?: number;
+    maxSegmentSeconds?: number;
+  } = {}
 ): Segment[] {
-  const padding = options.paddingSeconds ?? 0;
+  const prePadding = options.prePaddingSeconds ?? options.paddingSeconds ?? 0;
+  const postPadding = options.postPaddingSeconds ?? options.paddingSeconds ?? 0;
   const duration = options.durationSeconds;
   const sorted = segments
     .map((segment) => {
-      const start = Math.max(0, segment.start - padding);
-      const end = duration == null ? segment.end + padding : Math.min(duration, segment.end + padding);
+      const start = Math.max(0, segment.start - prePadding);
+      const end = duration == null ? segment.end + postPadding : Math.min(duration, segment.end + postPadding);
       return { start, end };
     })
     .filter((segment) => segment.end > segment.start)

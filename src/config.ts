@@ -57,7 +57,7 @@ export const defaultConfig: AppConfig = {
     token: process.env.PODCAST_PROXY_ADMIN_TOKEN
   },
   costs: {
-    monthlyBudgetUsd: 10,
+    monthlyBudgetUsd: 50,
     perRunBudgetUsd: 1,
     transcribeMaxMinutesPerRun: 180,
     llmMaxInputTokensPerRun: 250000,
@@ -111,6 +111,8 @@ export const defaultConfig: AppConfig = {
   },
   detection: {
     paddingSeconds: 0.6,
+    prePaddingSeconds: 0,
+    postPaddingSeconds: 0.4,
     minSegmentSeconds: 8,
     maxSegmentSeconds: 240
   },

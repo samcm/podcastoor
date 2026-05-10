@@ -8,6 +8,8 @@ export interface RuntimeTuning {
   };
   detection?: {
     paddingSeconds?: number;
+    prePaddingSeconds?: number;
+    postPaddingSeconds?: number;
     minSegmentSeconds?: number;
     maxSegmentSeconds?: number;
   };

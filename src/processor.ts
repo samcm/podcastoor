@@ -407,6 +407,8 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   const removed = normalizeSegments(removalSegments(detection.decisions, podcast.processing.confidenceThreshold), {
     durationSeconds: timelineDuration || episode.durationSeconds,
     paddingSeconds: podcast.detection.paddingSeconds,
+    prePaddingSeconds: podcast.detection.prePaddingSeconds,
+    postPaddingSeconds: podcast.detection.postPaddingSeconds,
     minSegmentSeconds: podcast.detection.minSegmentSeconds,
     maxSegmentSeconds: podcast.detection.maxSegmentSeconds
   });
@@ -537,6 +539,8 @@ function processingSignature(config: AppConfig, podcast: EffectivePodcastConfig,
     llm: podcast.llm,
     detection: {
       paddingSeconds: podcast.detection.paddingSeconds,
+      prePaddingSeconds: podcast.detection.prePaddingSeconds,
+      postPaddingSeconds: podcast.detection.postPaddingSeconds,
       minSegmentSeconds: podcast.detection.minSegmentSeconds,
       maxSegmentSeconds: podcast.detection.maxSegmentSeconds
     },

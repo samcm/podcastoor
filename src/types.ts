@@ -116,6 +116,8 @@ export interface LlmUsage {
 
 export interface DetectionConfig {
   paddingSeconds: number;
+  prePaddingSeconds: number;
+  postPaddingSeconds: number;
   minSegmentSeconds: number;
   maxSegmentSeconds: number;
 }

@@ -69,6 +69,8 @@ The running pipeline is:
 9. Render with a one-pass ffmpeg filter graph using `atrim`/`concat`, encoding once at at least the configured/source bitrate, and insert the marker tone.
 10. Rewrite RSS to local audio, chapter, and transcript URLs.
 
+The default render policy now uses asymmetric padding: zero seconds before the detected ad start and a small tail after the detected ad end. This is a deliberate precision trade-off. With prompt-generated timestamps, over-cutting the start of a window is more damaging than leaving a short ad tail, so the renderer is biased toward preserving editorial audio until a word-level aligner is added.
+
 ## Deployment Evaluation
 
 Real feed names, private subscription URLs, and per-episode run results belong in deployment notes or private observability data. The public project keeps methodology and tooling only.

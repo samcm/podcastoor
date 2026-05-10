@@ -57,7 +57,7 @@ describe("audio", () => {
       dryRun: false,
       downloadAudio: true,
       confidenceThreshold: 0.7,
-      detection: { ...defaultConfig.detection, paddingSeconds: 0, minSegmentSeconds: 0.1 }
+      detection: { ...defaultConfig.detection, paddingSeconds: 0, prePaddingSeconds: 0, postPaddingSeconds: 0, minSegmentSeconds: 0.1 }
     });
 
     expect(result.status).toBe("completed");

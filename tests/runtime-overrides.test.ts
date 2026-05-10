@@ -30,7 +30,7 @@ podcasts:
     updatedAt: new Date().toISOString(),
     global: {
       processing: { confidenceThreshold: 0.81 },
-      detection: { paddingSeconds: 1.25 }
+      detection: { paddingSeconds: 1.25, prePaddingSeconds: 0.2, postPaddingSeconds: 0.8 }
     },
     podcasts: {
       show: {
@@ -44,6 +44,8 @@ podcasts:
   const podcast = resolvePodcastConfig(config, "show");
   expect(config.processing.confidenceThreshold).toBe(0.81);
   expect(podcast.detection.paddingSeconds).toBe(1.25);
+  expect(podcast.detection.prePaddingSeconds).toBe(0.2);
+  expect(podcast.detection.postPaddingSeconds).toBe(0.8);
   expect(podcast.detection.minSegmentSeconds).toBe(12);
   expect(podcast.audio.jingle.enabled).toBe(false);
 });
