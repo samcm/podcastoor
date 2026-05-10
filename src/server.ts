@@ -712,8 +712,10 @@ function renderArtifactLinks(episode: UiEpisode): string {
 
 function renderAlignmentSummary(episode: UiEpisode): string {
   if (!episode.alignment) return "none";
+  const words = episode.alignment.wordCount != null ? ` · ${episode.alignment.wordCount} words` : "";
+  const cost = episode.alignment.costUsd != null ? ` · $${episode.alignment.costUsd.toFixed(6)}` : "";
   return escapeHtml(
-    `${episode.alignment.provider}/${episode.alignment.model} · ${(episode.alignment.confidence * 100).toFixed(0)}% · ${episode.alignment.adjustedSegments} adjusted · max ${episode.alignment.maxAdjustmentSeconds}s`
+    `${episode.alignment.provider}/${episode.alignment.model} · ${(episode.alignment.confidence * 100).toFixed(0)}% · ${episode.alignment.adjustedSegments} adjusted · max ${episode.alignment.maxAdjustmentSeconds}s${words}${cost}`
   );
 }
 

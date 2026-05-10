@@ -14,6 +14,8 @@ describe("config", () => {
     expect(config.transcripts.providers.openRouter.mode).toBe("audioChat");
     expect(config.transcripts.providers.openRouter.model).toBe("xiaomi/mimo-v2-omni");
     expect(config.artwork.model).toBe("google/gemini-3.1-flash-image-preview");
+    expect(config.alignment.provider).toBe("auto");
+    expect(config.alignment.model).toBe("elevenlabs-forced-alignment");
     expect(config.automation.processOnStartup).toBe(true);
   });
 

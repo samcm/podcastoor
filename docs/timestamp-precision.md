@@ -1,6 +1,6 @@
 # Timestamp Precision Plan
 
-Checked on 2026-05-10.
+Checked on 2026-05-10. Updated after implementing hosted forced alignment.
 
 ## Current Problem
 
@@ -25,20 +25,36 @@ Recommended practical tuning:
 3. Do a cheap edge-refinement pass only around candidate cuts. This pass should see about 20-40 seconds before and after each candidate boundary and decide whether to snap inward or outward.
 4. Prefer under-cutting by default: snap to the first ad word for starts and the last ad word for ends, then apply zero or minimal padding.
 
-## Better Alignment Options
+## Implemented Alignment Path
 
-The real upgrade is a separate alignment provider after transcription:
+The pipeline now has a real hosted forced-alignment path:
 
 1. Generate the best transcript text available.
-2. Align transcript words back to the waveform with a provider that returns word timestamps or with a forced aligner.
+2. Send the downloaded source audio plus transcript text to ElevenLabs `/v1/forced-alignment` when `ELEVENLABS_API_KEY` is set.
 3. Let the ad model classify over aligned words/utterances.
-4. Snap cuts to word boundaries and nearby silence boundaries.
+4. Snap cuts to provider word boundaries when available.
 5. Render from the snapped cut windows.
 
-Good candidates:
+Default config uses:
+
+```yaml
+alignment:
+  enabled: true
+  provider: auto
+  model: elevenlabs-forced-alignment
+  estimatedCostPerMinuteUsd: 0.003667
+  requireProvider: false
+```
+
+`auto` means: use ElevenLabs forced alignment when `ELEVENLABS_API_KEY` exists; otherwise fall back to segment-boundary cleanup. Set `requireProvider: true` to fail episodes instead of falling back.
+
+ElevenLabs forced alignment accepts audio plus transcript text and returns word/character timings. Source: https://elevenlabs.io/docs/api-reference/forced-alignment/create
+
+ElevenLabs API pricing lists Scribe speech-to-text at `$0.22/hour`, which is `$0.003667/min`; the forced-alignment response does not include request cost, so the app records this as an estimated alignment cost. Source: https://elevenlabs.io/pricing/api?price.section=speech_to_text
+
+Other candidates remain useful future options:
 
 - WhisperX: uses voice activity detection plus forced phoneme alignment for long-form transcription with word-level timestamps. Source: https://arxiv.org/abs/2303.00747
-- ElevenLabs Forced Alignment: accepts audio plus transcript text and returns character and word timing. Source: https://elevenlabs.io/docs/api-reference/forced-alignment/create
 - AssemblyAI word-level timestamps: pre-recorded STT responses include per-word start/end/confidence data. Source: https://www.assemblyai.com/docs/pre-recorded-audio/export-transcripts-as-srt-vtt-or-text#word-level-timestamps
 - Deepgram or similar hosted STT providers: useful when the provider exposes word timestamps, confidence, utterances, and silence/endpointing metadata.
 
@@ -52,7 +68,7 @@ The UI exposes before/after cut padding separately so each podcast can be tuned 
 data/config/runtime-overrides.json
 ```
 
-Forced reprocesses will pick up the new cut policy and write a new processing signature, so older manifests can be distinguished from re-rendered episodes.
+Forced reprocesses will pick up the new cut policy and alignment config, write a new processing signature, and store alignment metadata in each manifest: provider, model, confidence, word count, estimated cost, adjusted segments, and max adjustment.
 
 ## Next Implementation Step
 

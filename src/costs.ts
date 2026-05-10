@@ -1,4 +1,4 @@
-import type { AppConfig, EffectivePodcastConfig, Transcript } from "./types.js";
+import type { AlignmentConfig, AppConfig, EffectivePodcastConfig, Transcript } from "./types.js";
 import { readJson, writeJson } from "./utils.js";
 import path from "node:path";
 
@@ -61,6 +61,20 @@ export function estimateEpisodeCost(podcast: EffectivePodcastConfig, transcript:
   }
 
   return { estimatedUsd: Number(estimatedUsd.toFixed(6)), notes };
+}
+
+export function estimateAlignmentCost(config: AlignmentConfig, durationSeconds?: number): CostEstimate {
+  if (!config.enabled || durationSeconds == null || durationSeconds <= 0) return { estimatedUsd: 0, notes: [] };
+  const hosted =
+    config.provider === "elevenlabs-forced" ||
+    (config.provider === "auto" && Boolean(process.env.ELEVENLABS_API_KEY));
+  if (!hosted) return { estimatedUsd: 0, notes: [] };
+  const minutes = durationSeconds / 60;
+  const cost = minutes * config.estimatedCostPerMinuteUsd;
+  return {
+    estimatedUsd: Number(cost.toFixed(6)),
+    notes: [`ElevenLabs alignment estimate: ${minutes.toFixed(1)} min x $${config.estimatedCostPerMinuteUsd}/min on ${config.model}`]
+  };
 }
 
 function estimateClassifierWindows(transcript: Transcript): number {
@@ -177,11 +191,11 @@ export async function summarizeCosts(config: AppConfig): Promise<CostSummary> {
 
 function parseActualCostNote(note: string): { stage: string; model: string; actualUsd: number } | undefined {
   if (!/\bactual:/i.test(note)) return undefined;
-  const match = /\b(transcript|ad-detection|chapter-generation)\s+actual:[\s\S]*?\bon\s+([^=|]+?)\s*=\s*\$([0-9]+(?:\.[0-9]+)?)/i.exec(note);
+    const match = /\b(transcript|alignment|ad-detection|chapter-generation)\s+actual:[\s\S]*?\bon\s+([^=|]+?)\s*=\s*\$([0-9]+(?:\.[0-9]+)?)/i.exec(note);
   if (!match) return undefined;
   const purpose = match[1].toLowerCase();
   return {
-    stage: purpose === "transcript" ? "transcription" : "text-llm",
+    stage: purpose === "transcript" ? "transcription" : purpose === "alignment" ? "alignment" : "text-llm",
     model: match[2].trim(),
     actualUsd: Number(match[3])
   };

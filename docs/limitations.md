@@ -24,7 +24,7 @@ Pocket Casts generated transcripts are not used by default. There is no public P
 
 - Dynamic ad removal depends on ASR/model detection after the inserted audio appears in the downloaded file. There is not yet an audio-fingerprint diff across multiple regional downloads.
 - No diarization-aware classification yet.
-- Current alignment is a segment-boundary pass over utterance timestamps, not provider word timestamps. The next precision upgrade should add provider word timestamps or forced alignment, preferably Qwen3-ASR/Qwen3-ForcedAligner, Mistral Voxtral Mini Transcribe V2, Deepgram Nova-3, ElevenLabs Scribe v2, or Groq direct STT.
+- Hosted forced alignment is implemented through ElevenLabs when `ELEVENLABS_API_KEY` is configured. Without that key, `alignment.provider: auto` falls back to segment-boundary cleanup so processing continues.
 - Web UI can enqueue reprocess/reset/tuning actions, but does not yet save manual segment edits.
 - No purge/retention policy, by design for this spike.
 - Queue state is persisted, but there is still no multi-worker locking beyond the single intended worker deployment.
@@ -40,7 +40,7 @@ Pocket Casts generated transcripts are not used by default. There is no public P
    - re-render one episode.
 
 2. Add a transcript pipeline:
-   - Qwen3-ASR/Qwen3-ForcedAligner or another word-timestamp provider,
+   - Qwen3-ASR/Qwen3-ForcedAligner or another word-timestamp provider as an alternative to ElevenLabs,
    - boundary snapping to word/silence timestamps,
    - transcript cache keyed by audio fingerprint,
    - WER comparison against feed or Pocket Casts reference transcripts when available.

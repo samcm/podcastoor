@@ -90,8 +90,10 @@ export interface TranscriptProviderConfig {
 
 export interface AlignmentConfig {
   enabled: boolean;
-  provider: "segment-boundary" | "none";
+  provider: "auto" | "elevenlabs-forced" | "segment-boundary" | "none";
   model: string;
+  estimatedCostPerMinuteUsd: number;
+  requireProvider: boolean;
 }
 
 export interface LlmConfig {
@@ -219,6 +221,16 @@ export interface TranscriptSegment {
   end: number;
   text: string;
   speaker?: string;
+  words?: AlignedWord[];
+}
+
+export interface AlignedWord {
+  text: string;
+  start: number;
+  end: number;
+  confidence?: number;
+  loss?: number;
+  segmentIndex?: number;
 }
 
 export interface Transcript {
@@ -227,6 +239,7 @@ export interface Transcript {
   language?: string;
   text: string;
   segments: TranscriptSegment[];
+  words?: AlignedWord[];
   usage?: {
     provider: "openrouter" | "openai" | "local" | "feed" | "pocketCasts";
     model?: string;
@@ -248,7 +261,7 @@ export interface SegmentDecision {
   alignment?: {
     startSegmentIndex?: number;
     endSegmentIndex?: number;
-    method: "model-timestamp" | "stt-chunk" | "feed-transcript-segment" | "manual";
+    method: "model-timestamp" | "stt-chunk" | "feed-transcript-segment" | "forced-word" | "manual";
   };
   text?: string;
 }
@@ -301,6 +314,9 @@ export interface EpisodeManifest {
     adjustedSegments: number;
     averageAdjustmentSeconds: number;
     maxAdjustmentSeconds: number;
+    wordCount?: number;
+    seconds?: number;
+    costUsd?: number;
     notes: string[];
   };
   transcript?: {

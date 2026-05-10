@@ -161,12 +161,15 @@ The text classifier is separate from transcription, so the pipeline is:
 
 1. Audio download.
 2. OpenRouter audio-chat transcription into timestamped utterance segments.
-3. Qwen text classification over timestamped transcript windows.
-4. Model-returned absolute source timestamps mapped back to transcript segments.
-5. Segment-boundary alignment pass to remove impossible transcript overlaps.
-6. ffmpeg cuts and marker-tone insertion.
+3. Forced-alignment pass when `ELEVENLABS_API_KEY` is available, returning provider word timestamps and remapping transcript segment boundaries.
+4. Qwen text classification over timestamped transcript windows.
+5. Model-returned absolute source timestamps mapped back to transcript segments.
+6. Cut windows snapped to forced-aligned word timestamps when available.
+7. ffmpeg cuts and marker-tone insertion.
 
-The current alignment provider is `segment-boundary-v1`. It stores alignment metadata in the manifest and tightens impossible segment ordering, but it is not a word-level forced aligner. The alignment abstraction is isolated so a stronger provider can replace it later.
+The default alignment mode is `auto`. With `ELEVENLABS_API_KEY` set, it calls ElevenLabs `/v1/forced-alignment`; without that key, it falls back to `segment-boundary-v1` so processing does not hard-fail. Set `alignment.requireProvider: true` if missing forced alignment should fail the episode instead of falling back.
+
+ElevenLabs forced alignment is extra hosted work. The app accounts for it with `alignment.estimatedCostPerMinuteUsd`, defaulting to `$0.003667/min`, equivalent to `$0.22/hour`, the published ElevenLabs Scribe STT API price at the time this was added. The forced-alignment API response does not include exact per-request spend, so this is recorded as an estimate.
 
 ## Transcription Providers
 
@@ -190,7 +193,7 @@ The current best path with the available key is:
 
 OpenRouter's dedicated STT endpoint currently returns text plus usage rather than native word timestamps, so the app uses OpenRouter audio-chat transcription by default and asks the audio model for strict timestamped JSON segments. Those timestamps are still model-generated, not forced-alignment timestamps. OpenRouter chat responses include `usage.cost`; the app records that exact model-call cost when present and only falls back to token-price estimates for preflight budgeting.
 
-Timestamp precision notes and the proposed forced-alignment upgrade path are tracked in [`docs/timestamp-precision.md`](docs/timestamp-precision.md).
+Timestamp precision notes and the forced-alignment path are tracked in [`docs/timestamp-precision.md`](docs/timestamp-precision.md).
 
 ## Data Layout
 

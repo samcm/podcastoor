@@ -98,8 +98,10 @@ export const defaultConfig: AppConfig = {
   },
   alignment: {
     enabled: true,
-    provider: "segment-boundary",
-    model: "segment-boundary-v1"
+    provider: "auto",
+    model: "elevenlabs-forced-alignment",
+    estimatedCostPerMinuteUsd: 0.003667,
+    requireProvider: false
   },
   llm: {
     provider: "openrouter",

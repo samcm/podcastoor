@@ -3,19 +3,19 @@ import { createHash } from "node:crypto";
 import type { AppConfig, Chapter, EffectivePodcastConfig, EpisodeManifest, LlmUsage, ParsedEpisode, ProcessingOptions, Transcript } from "./types.js";
 import { loadConfig, resolvePodcastConfig } from "./config.js";
 import { fetchFeed, parseFeed } from "./feed.js";
-import { isRecent, readJson } from "./utils.js";
+import { isRecent, pathExists, readJson } from "./utils.js";
 import { ensureEpisodeDir, readManifest, writeManifest } from "./storage.js";
 import { acquireTranscript, writeTranscriptArtifacts } from "./transcripts.js";
 import { dedupeSegmentDecisions, detectAdSegments } from "./detectors.js";
 import { buildChapters, fetchPodcastIndexChapters, normalizeChapters, writeChapters } from "./chapters.js";
 import { durationAfterEdits, normalizeSegments, remapChapters, removalSegments } from "./timeline.js";
 import { renderEpisodeAudio, downloadAudio } from "./audio.js";
-import { assertBudget, estimateEpisodeCost, recordCost } from "./costs.js";
+import { assertBudget, estimateAlignmentCost, estimateEpisodeCost, recordCost } from "./costs.js";
 import { classifyTranscriptWithOpenRouter, generateChaptersWithOpenRouter } from "./openrouter.js";
 import { appendActivity } from "./activity.js";
 import { PIPELINE_VERSION } from "./pipeline.js";
 import { ensurePodcastArtwork } from "./artwork.js";
-import { alignTranscript } from "./alignment.js";
+import { alignmentWillUseHostedProvider, alignTranscript, refineDecisionsWithAlignedWords } from "./alignment.js";
 import {
   isFatalProviderError,
   claimManualReprocessRequests,
@@ -261,9 +261,12 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   let sourceAudioPath: string | undefined;
   const needsAudioForTranscript =
     !dryRun && (podcast.transcripts.providers.openRouter.enabled || podcast.transcripts.providers.openai.enabled) && Boolean(episode.enclosure?.url);
-  if (needsAudioForTranscript && episode.enclosure?.url) {
+  const needsAudioForAlignment = !dryRun && alignmentWillUseHostedProvider(config.alignment) && Boolean(episode.enclosure?.url);
+  if ((needsAudioForTranscript || needsAudioForAlignment) && episode.enclosure?.url) {
     await markQueueStage(config, podcast, episode, "downloading audio");
-    await assertBudget(config, estimateEpisodeCost(podcast, undefined, episode.durationSeconds).estimatedUsd);
+    const preflightTranscriptCost = estimateEpisodeCost(podcast, undefined, episode.durationSeconds);
+    const preflightAlignmentCost = estimateAlignmentCost(config.alignment, episode.durationSeconds);
+    await assertBudget(config, preflightTranscriptCost.estimatedUsd + preflightAlignmentCost.estimatedUsd);
     await downloadAudio(episode.enclosure.url, paths.sourceAudio);
     sourceAudioPath = paths.sourceAudio;
     logger.info({ podcast: podcast.slug, episode: episode.title }, "source audio ready");
@@ -287,7 +290,11 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     reusableTranscript?.text || reusableTranscript?.segments.length
       ? reusableTranscript
       : await acquireTranscript(config, podcast, episode, { sourceAudioPath, dryRun });
-  const alignment = alignTranscript(config.alignment, transcript);
+  const alignmentAudioPath = sourceAudioPath ?? ((await pathExists(paths.sourceAudio)) ? paths.sourceAudio : undefined);
+  const alignment = await alignTranscript(config.alignment, transcript, {
+    sourceAudioPath: alignmentAudioPath,
+    durationSeconds: episode.durationSeconds
+  });
   const alignedTranscript = alignment.transcript;
   logger.info(
     {
@@ -324,8 +331,10 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
       details: {
         provider: alignment.metadata.provider,
         model: alignment.metadata.model,
+        wordCount: alignment.metadata.wordCount,
         adjustedSegments: alignment.metadata.adjustedSegments,
-        maxAdjustmentSeconds: alignment.metadata.maxAdjustmentSeconds
+        maxAdjustmentSeconds: alignment.metadata.maxAdjustmentSeconds,
+        costUsd: alignment.metadata.costUsd
       }
     });
   }
@@ -383,9 +392,26 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
       throw error;
     }
   }
-  detection.decisions = dedupeSegmentDecisions(detection.decisions);
+  const refined = refineDecisionsWithAlignedWords(detection.decisions, alignedTranscript);
+  detection.decisions = dedupeSegmentDecisions(refined.decisions);
+  if (refined.adjustedDecisions > 0) {
+    detection.modelNotes = [...(detection.modelNotes ?? []), `Refined ${refined.adjustedDecisions} ad decision boundaries with forced word timestamps.`];
+  }
   await markQueueStage(config, podcast, episode, "estimating cost");
-  const cost = estimateEpisodeCost(podcast, alignedTranscript, episode.durationSeconds);
+  const textCost = estimateEpisodeCost(podcast, alignedTranscript, episode.durationSeconds);
+  const alignmentCost =
+    alignment.metadata?.costUsd != null
+      ? {
+          estimatedUsd: alignment.metadata.costUsd,
+          notes: [
+            `ElevenLabs alignment estimate: ${((alignment.metadata.seconds ?? episode.durationSeconds ?? 0) / 60).toFixed(1)} min x $${config.alignment.estimatedCostPerMinuteUsd}/min on ${alignment.metadata.model}`
+          ]
+        }
+      : estimateAlignmentCost(config.alignment, episode.durationSeconds);
+  const cost = {
+    estimatedUsd: Number((textCost.estimatedUsd + alignmentCost.estimatedUsd).toFixed(6)),
+    notes: [...textCost.notes, ...alignmentCost.notes]
+  };
   await assertBudget(config, cost.estimatedUsd);
 
   const hasUpstreamChapters = episode.chapters.length > 0;
@@ -443,10 +469,17 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   });
 
   await markQueueStage(config, podcast, episode, "writing manifest");
-  const actualUsd = Number(((alignedTranscript.usage?.costUsd ?? 0) + llmUsage.reduce((sum, usage) => sum + (usage.costUsd ?? 0), 0)).toFixed(6));
+  const alignmentActualUsd = alignment.metadata?.costUsd ?? 0;
+  const actualUsd = Number(((alignedTranscript.usage?.costUsd ?? 0) + alignmentActualUsd + llmUsage.reduce((sum, usage) => sum + (usage.costUsd ?? 0), 0)).toFixed(6));
   const actualNotes = llmUsage
     .filter((usage) => usage.costUsd != null)
     .map((usage) => `OpenRouter ${usage.purpose} actual: ${usage.promptTokens ?? "?"} input tokens + ${usage.completionTokens ?? "?"} output tokens on ${usage.model} = $${usage.costUsd!.toFixed(6)}`);
+  const alignmentActualNotes =
+    alignment.metadata?.costUsd != null
+      ? [
+          `ElevenLabs alignment actual: ${((alignment.metadata.seconds ?? episode.durationSeconds ?? 0) / 60).toFixed(1)} min on ${alignment.metadata.model} = $${alignment.metadata.costUsd.toFixed(6)}`
+        ]
+      : [];
 
   const manifest: EpisodeManifest = {
     schemaVersion: 1,
@@ -485,7 +518,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
       estimatedUsd: cost.estimatedUsd,
       actualUsd,
       llmCalls: llmUsage.length,
-      notes: [...cost.notes, ...actualNotes]
+      notes: [...cost.notes, ...alignmentActualNotes, ...actualNotes]
     },
     generatedAt: new Date().toISOString()
   };
@@ -499,7 +532,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     estimatedUsd: cost.estimatedUsd,
     actualUsd,
     llmCalls: llmUsage.length,
-    notes: [...cost.notes, ...actualNotes]
+    notes: [...cost.notes, ...alignmentActualNotes, ...actualNotes]
   });
   logger.info(
     {

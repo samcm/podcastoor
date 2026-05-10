@@ -1,1 +1,1 @@
-export const PIPELINE_VERSION = "v15-accurate-render-advertisers";
+export const PIPELINE_VERSION = "v16-forced-alignment";

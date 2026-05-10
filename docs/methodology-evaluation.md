@@ -18,7 +18,7 @@ Checked and exercised on 2026-05-06.
 | Mistral Voxtral Mini Transcribe V2 | Around `$0.003/min` published | Word timestamps + diarization | Strong hosted non-Whisper contender, needs `MISTRAL_API_KEY`. |
 | Qwen3-ASR-Flash / Qwen3 ForcedAligner | About `$0.0021/min` international for hosted file transcription; local aligner has machine cost | Word timestamps / forced alignment | Strongest researched alignment direction; needs DashScope integration or local model deployment. |
 | Deepgram Nova-3 | `$0.0048-$0.0077/min` listed for pre-recorded monolingual depending plan | Word timestamps + confidence + utterances | Strong hosted production option, higher cost, needs `DEEPGRAM_API_KEY`. |
-| ElevenLabs Scribe v2 | Paid by audio duration | Word timestamps + diarization + audio tags | Strong hosted production option, needs `ELEVENLABS_API_KEY`. |
+| ElevenLabs Forced Alignment / Scribe v2 | `$0.22/hour` published for Scribe STT; forced alignment cost is estimated from this unless provider usage is exposed | Forced alignment returns word/character timestamps; Scribe returns word timestamps + diarization + audio tags | Implemented as the hosted forced-alignment provider when `ELEVENLABS_API_KEY` is set. |
 | OpenAI transcription | Paid per minute | Good transcript endpoint option | Kept as provider option, disabled while OpenRouter audio transcription is preferred. |
 | Qwen 3.6 Flash text classifier | About `$0.0246` observed for a 33.4 min full-episode 7-window ad classification smoke test | Returns absolute source timestamps | Current default classifier after full-episode smoke test. |
 | DeepSeek V4 Pro text classifier | Stronger long-context reasoning with still modest cost | Uses ASR segment IDs or absolute timestamps | Configurable alternative, but not the current default after the latest full-episode smoke test. |
@@ -81,6 +81,8 @@ Completed OpenRouter calls record the exact `usage.cost` returned in the respons
 
 The bad cut precision is structural, not a keyword problem. OpenRouter's tested STT wrapper returns one transcript text result per audio chunk, while OpenRouter audio-chat models return prompt-shaped timestamp JSON rather than provider-guaranteed word timestamps. That can work for coarse removal and is better than whole-chunk cuts, but it is not a real forced-alignment layer.
 
+The app now supports ElevenLabs hosted forced alignment. When `ELEVENLABS_API_KEY` is present and `alignment.provider` is `auto` or `elevenlabs-forced`, each source audio file plus transcript text is sent to `/v1/forced-alignment`; returned word timestamps are stored in transcript JSON, segment boundaries are remapped, and model ad decisions are snapped to forced-word boundaries where possible. Without the key, `auto` falls back to segment-boundary cleanup.
+
 The better pipeline is:
 
 1. Transcribe with a provider that returns word-level timestamps.
@@ -90,7 +92,7 @@ The better pipeline is:
 
 Groq direct is a practical cheap upgrade because its speech-to-text docs expose `verbose_json` with `timestamp_granularities` including `word` and `segment`, and its pricing page lists Whisper Large v3 Turbo at `$0.04/hour`. It may not fix transcript quality by itself, because the OpenRouter Whisper Turbo bake-off had clear Australian show/brand errors.
 
-The stronger accuracy/alignment direction is Qwen3-ASR plus Qwen3-ForcedAligner, or a hosted provider with word timestamps such as Mistral Voxtral Mini Transcribe V2, Deepgram Nova-3, or ElevenLabs Scribe v2. Qwen is especially relevant because its published ASR paper includes a separate non-autoregressive forced aligner, and Alibaba's hosted API documents word-level timestamps for Qwen3-ASR file transcription.
+The next stronger accuracy/alignment direction is Qwen3-ASR plus Qwen3-ForcedAligner, or another hosted provider with word timestamps such as Mistral Voxtral Mini Transcribe V2 or Deepgram Nova-3. Qwen is especially relevant because its published ASR paper includes a separate non-autoregressive forced aligner, and Alibaba's hosted API documents word-level timestamps for Qwen3-ASR file transcription.
 
 Gemini and MiMo audio models can be prompted to return timestamped transcript JSON. In the focused test, `gemini-3.1-flash-lite-preview` returned plausible 2-10 second segment timestamps and consumed real audio tokens, but it still made brand/name errors. `xiaomi/mimo-v2-omni` performed better on the same phrase check. These timestamps should be treated as model-estimated labels, not as a forced-alignment contract for destructive audio cuts.
 
