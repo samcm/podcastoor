@@ -931,10 +931,27 @@ function renderCostTable<T extends Record<string, unknown>>(title: string, rows:
   return `<section class="panel cost-table">
     <div class="section-head"><h2>${escapeHtml(title)}</h2></div>
     <table>
-      <thead><tr>${keys.map((key) => `<th>${escapeHtml(key)}</th>`).join("")}</tr></thead>
+      <thead><tr>${keys.map((key) => `<th>${escapeHtml(formatCostHeader(key))}</th>`).join("")}</tr></thead>
       <tbody>${body || `<tr><td colspan="${keys.length}">No data yet.</td></tr>`}</tbody>
     </table>
   </section>`;
+}
+
+function formatCostHeader(key: string): string {
+  const labels: Record<string, string> = {
+    podcastSlug: "Podcast",
+    episodeKey: "Episode",
+    actualUsd: "Actual",
+    estimatedUsd: "Estimated",
+    llmCalls: "LLM Calls",
+    episodes: "Episodes",
+    day: "Day",
+    failures: "Failures",
+    model: "Model",
+    entries: "Entries",
+    stage: "Stage"
+  };
+  return labels[key] ?? key.replace(/([a-z])([A-Z])/g, "$1 $2");
 }
 
 function formatCostCell(value: unknown): string {
