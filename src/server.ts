@@ -1005,8 +1005,9 @@ function page(title: string, body: string): string {
     .inline-controls { margin-top:12px; }
     .artifact-links { padding:0; margin-top:12px; display:flex; flex-wrap:wrap; gap:10px; }
     .artifact-links a { border:1px solid var(--line); border-radius:5px; background:#fff; padding:4px 8px; }
-    .episodes { display:grid; gap:14px; }
-    .episode { padding:18px; }
+    .episodes { display:grid; gap:14px; min-width:0; }
+    .episode { padding:18px; min-width:0; }
+    .episode > * { min-width:0; }
     .episode-head { display:flex; justify-content:space-between; gap:12px; align-items:start; }
     .episode-head span { border:1px solid var(--line); border-radius:999px; padding:3px 9px; color:var(--muted); }
     dl { display:grid; grid-template-columns:130px 1fr; gap:6px 12px; margin:14px 0 0; }
@@ -1032,8 +1033,8 @@ function page(title: string, body: string): string {
     .activity time, .activity span, .activity em { color:var(--muted); font-style:normal; }
     .activity code { grid-column:1 / -1; color:var(--muted); font-size:12px; }
     audio { width:100%; height:34px; }
-    .compare { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; margin-top:14px; }
-    .timeline-block { margin-top:14px; padding:0; }
+    .compare { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; max-width:100%; margin-top:14px; }
+    .timeline-block { max-width:100%; margin-top:14px; padding:0; }
     .timeline-head { display:flex; justify-content:space-between; gap:12px; align-items:end; }
     .timeline-head span { color:var(--muted); font-size:12px; }
     .timeline-label { display:flex; justify-content:space-between; margin-top:10px; color:var(--muted); font-size:12px; }
@@ -1053,12 +1054,12 @@ function page(title: string, body: string): string {
     .cut-list li { display:grid; grid-template-columns:auto auto 1fr auto; gap:8px; align-items:center; padding:8px; border:1px solid var(--line); border-radius:6px; background:#fafafa; }
     .cut-list button, .transcript button, .audit-table button { min-height:30px; border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--accent); padding:3px 7px; cursor:pointer; }
     .cut-list small { color:var(--muted); white-space:nowrap; }
-    .audit-table { padding:0; margin-top:14px; overflow-x:auto; }
+    .audit-table { max-width:100%; padding:0; margin-top:14px; overflow-x:auto; }
     .audit-table table { min-width:900px; font-size:12px; }
     .audit-table th, .audit-table td { padding:8px 10px; }
     .audit-table td:first-child, .audit-table td:nth-child(2), .audit-table td:nth-child(3), .audit-table td:nth-child(4), .audit-table td:nth-child(5), .audit-table td:nth-child(6) { white-space:nowrap; }
-    .transcript-wrap { padding:0; margin-top:16px; }
-    details.transcript { margin-top:10px; border-top:1px solid var(--line); padding-top:12px; overflow-x:auto; }
+    .transcript-wrap { max-width:100%; padding:0; margin-top:16px; }
+    details.transcript { max-width:100%; margin-top:10px; border-top:1px solid var(--line); padding-top:12px; overflow-x:auto; }
     summary { cursor:pointer; color:var(--accent); font-weight:600; }
     .transcript table { min-width:880px; margin-top:10px; font-size:12px; }
     .transcript td:first-child, .transcript td:nth-child(2), .transcript td:nth-child(3) { white-space:nowrap; color:var(--muted); width:74px; }
