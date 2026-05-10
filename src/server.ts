@@ -971,7 +971,7 @@ function page(title: string, body: string): string {
     body { margin:0; font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
     body > header, body > main, body > section { width:min(1120px, calc(100% - 32px)); margin:0 auto; padding:24px; }
     header { padding-top:28px; padding-bottom:16px; }
-    header p { margin:6px 0 0; color:var(--muted); }
+    header p { margin:6px 0 0; color:var(--muted); overflow-wrap:anywhere; }
     h1 { margin:0 0 6px; font-size:28px; line-height:1.14; font-weight:700; }
     h2 { margin:0; font-size:17px; }
     h3 { margin:16px 0 6px; font-size:13px; text-transform:uppercase; color:var(--muted); }
@@ -1076,6 +1076,8 @@ function page(title: string, body: string): string {
       .section-head { align-items:flex-start; flex-direction:column; }
       .controls form, .inline-controls { display:grid; grid-template-columns:1fr; align-items:stretch; }
       .controls label, .controls input, .controls select, .controls button, .inline-controls button { width:100%; min-height:42px; }
+      .controls label:has(input[type="checkbox"]) { min-height:42px; justify-content:flex-start; gap:8px; }
+      .controls label:has(input[type="checkbox"]) input { width:auto; min-height:auto; flex:0 0 auto; }
       .meta { grid-template-columns:1fr; gap:10px; }
       .podcast-overview { grid-template-columns:1fr; }
       .podcast-art { width:min(180px, 100%); }
