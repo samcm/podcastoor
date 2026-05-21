@@ -211,8 +211,6 @@ The current best path with the available key is:
 
 OpenRouter's dedicated STT endpoint currently returns text plus usage rather than native word timestamps, so the app uses OpenRouter audio-chat transcription by default and asks the audio model for strict timestamped JSON segments. Those timestamps are still model-generated, not forced-alignment timestamps. OpenRouter chat responses include `usage.cost`; the app records that exact model-call cost when present and only falls back to token-price estimates for preflight budgeting.
 
-Timestamp precision notes and the forced-alignment path are tracked in [`docs/timestamp-precision.md`](docs/timestamp-precision.md).
-
 ## Data Layout
 
 ```text
