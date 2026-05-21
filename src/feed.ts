@@ -333,7 +333,7 @@ function appendProxyMetadata(item: Record<string, unknown>, manifest: EpisodeMan
 function buildProxyMetadataBlock(manifest: EpisodeManifest): string {
   const sourceDuration = manifest.audio.sourceDurationSeconds ?? manifest.originalDurationSeconds;
   const processedDuration = manifest.processedDurationSeconds ?? manifest.audio.durationSeconds;
-  const savedSeconds = sourceDuration != null && processedDuration != null ? Math.max(0, sourceDuration - processedDuration) : undefined;
+  const savedSeconds = Math.max(0, manifest.audio.removedSeconds ?? 0);
   const renderedCuts = manifest.renderedCuts ?? manifest.decisions.filter((decision) => decision.action === "remove").map((decision) => ({ start: decision.start, end: decision.end }));
   const removedAds = removedAdList(manifest, renderedCuts);
   const llmCost = (manifest.llm ?? []).reduce((sum, usage) => sum + (usage.costUsd ?? 0), 0);

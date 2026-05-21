@@ -54,13 +54,18 @@ function PodcastBody({ data, mobile, reload }: { data: DeepDive; mobile: boolean
   const det = data.config.detection;
   const podcastBody = { scope: "podcast" as const, podcastSlug: data.slug, ...options };
 
+  const savedSeconds = data.episodes.reduce((sum, episode) => sum + Math.max(0, episode.audio.removedSeconds ?? 0), 0);
+  const sourceSeconds = data.episodes.reduce((sum, episode) => sum + Math.max(0, episode.originalDurationSeconds ?? 0), 0);
+  const avgAdsPct = sourceSeconds > 0 ? Number(((savedSeconds / sourceSeconds) * 100).toFixed(1)) : 0;
+  const artworkUrl = data.metadata.localArtworkUrl ?? data.metadata.sourceImageUrl;
+
   const stats: Array<[string, string, string?]> = [
     ["EPISODES", String(demo.episodes ?? data.metadata.manifestCount)],
     ["PROCESSED", String(demo.processed ?? data.metadata.processedCount)],
     ["FAILED", String(demo.failed ?? 0), S.red],
     ["QUARANTINED", String(demo.quarantined ?? 0), S.red],
-    ["TIME SAVED", fmtHoursMinutes(demo.savedSeconds ?? 0), S.accent],
-    ["AVG ADS", `${demo.avgAdsPct ?? 0}%`],
+    ["TIME SAVED", fmtHoursMinutes(demo.savedSeconds ?? savedSeconds), S.accent],
+    ["AVG ADS", `${demo.avgAdsPct ?? avgAdsPct}%`],
     ["SPEND 30D", fmtUsd(demo.spend30dUsd ?? 0)],
     ["LATEST", demo.latestRelative ?? "—"],
   ];
@@ -91,7 +96,7 @@ function PodcastBody({ data, mobile, reload }: { data: DeepDive; mobile: boolean
 
       <SPanel>
         <div style={{ padding: 16, display: "flex", gap: 16, flexDirection: mobile ? "column" : "row" }}>
-          <SArt title={data.name} slug={data.slug} color={accent} size={mobile ? 88 : 120} />
+          <SArt title={data.name} slug={data.slug} color={accent} src={artworkUrl} size={mobile ? 88 : 120} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: -0.3 }}>{data.name}</h1>
@@ -132,7 +137,7 @@ function PodcastBody({ data, mobile, reload }: { data: DeepDive; mobile: boolean
                   const n = episodeNumber(e);
                   const src = e.originalDurationSeconds ?? 0;
                   const proc = e.processedDurationSeconds ?? 0;
-                  const saved = Math.max(0, src - proc);
+                  const saved = Math.max(0, e.audio.removedSeconds ?? src - proc);
                   const cuts = countAction(e, "remove");
                   const marks = countAction(e, "mark-only");
                   const note = e.modelNotes?.[0];

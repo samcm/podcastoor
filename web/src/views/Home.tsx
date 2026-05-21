@@ -10,7 +10,7 @@ const OUTCOME_COLOR: Record<string, string> = { ok: S.green, info: S.textDim, wa
 function PodcastTile({ p, mobile }: { p: PodcastCard; mobile: boolean }) {
   return (
     <Link to={`/podcasts/${p.slug}`} style={{ display: "flex", gap: 10, padding: 12 }}>
-      <SArt title={p.name} slug={p.slug} color={p.color} size={56} />
+      <SArt title={p.name} slug={p.slug} color={p.color} src={p.artworkUrl} size={56} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontWeight: 600, fontSize: 13, color: S.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>

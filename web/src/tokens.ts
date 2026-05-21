@@ -31,8 +31,9 @@ export function fmtTime(seconds: number): string {
 }
 
 export function fmtDur(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const ss = seconds % 60;
+  const rounded = Math.round(seconds);
+  const m = Math.floor(rounded / 60);
+  const ss = rounded % 60;
   return `${m}m ${String(ss).padStart(2, "0")}s`;
 }
 

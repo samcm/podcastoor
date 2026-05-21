@@ -144,7 +144,7 @@ async function readPodcastFeedMetadata(feedUrl: string): Promise<{
   }
 }
 
-async function readLocalArtworkUrl(config: AppConfig, slug: string): Promise<string | undefined> {
+export async function readLocalArtworkUrl(config: AppConfig, slug: string): Promise<string | undefined> {
   const paths = podcastAssetPaths(config, slug);
   if (!(await pathExists(paths.artwork))) return undefined;
   return absoluteUrl(config.server.publicBaseUrl, `/assets/${slug}/artwork.jpg`);

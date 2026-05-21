@@ -1,5 +1,5 @@
 import type { AppConfig, EpisodeManifest, Transcript } from "./types.js";
-import { listManifests } from "./library.js";
+import { listManifests, readLocalArtworkUrl } from "./library.js";
 import { episodePaths, readManifest } from "./storage.js";
 import { listQueueEpisodes, type QueueEpisodeState } from "./queue.js";
 import { summarizeCosts } from "./costs.js";
@@ -39,12 +39,14 @@ export interface PodcastCard {
   name: string;
   host: string;
   color: string;
+  artworkUrl?: string;
   status: PodcastStatus;
   episodes: number;
   processed: number;
   failed: number;
   quarantined: number;
   savedSeconds: number;
+  sourceSeconds: number;
   avgAdsPct: number;
   spend30dUsd: number;
   latestRelative: string;
@@ -192,6 +194,14 @@ function markCount(manifest: EpisodeManifest): number {
   return manifest.decisions.filter((d) => d.action === "mark-only").length;
 }
 
+function sourceSecondsForManifest(manifest: EpisodeManifest): number {
+  return manifest.audio.sourceDurationSeconds ?? manifest.originalDurationSeconds ?? 0;
+}
+
+function savedSecondsForManifest(manifest: EpisodeManifest): number {
+  return Math.max(0, manifest.audio.removedSeconds ?? 0);
+}
+
 async function buildPodcastCards(config: AppConfig): Promise<PodcastCard[]> {
   const queue = await listQueueEpisodes(config);
   const cards: PodcastCard[] = [];
@@ -206,10 +216,9 @@ async function buildPodcastCards(config: AppConfig): Promise<PodcastCard[]> {
     const derivedFailed = queueForPodcast.filter((q) => q.state === "failed" || q.state === "waiting-for-credits").length;
     const derivedQuar = queueForPodcast.filter((q) => q.state === "quarantined").length;
     const completed = manifests.filter((m) => m.audio.status === "completed");
-    const savedSeconds = completed.reduce((sum, m) => sum + Math.max(0, (m.originalDurationSeconds ?? 0) - (m.processedDurationSeconds ?? 0)), 0);
-    const avgAds = completed.length
-      ? completed.reduce((sum, m) => sum + (m.originalDurationSeconds ? (m.audio.removedSeconds / m.originalDurationSeconds) * 100 : 0), 0) / completed.length
-      : 0;
+    const savedSeconds = completed.reduce((sum, m) => sum + savedSecondsForManifest(m), 0);
+    const sourceSeconds = completed.reduce((sum, m) => sum + sourceSecondsForManifest(m), 0);
+    const avgAds = sourceSeconds > 0 ? (savedSeconds / sourceSeconds) * 100 : 0;
 
     const demo = meta.demo;
     cards.push({
@@ -217,12 +226,14 @@ async function buildPodcastCards(config: AppConfig): Promise<PodcastCard[]> {
       name: podcast.name,
       host: meta.host ?? "—",
       color: colorFor(config, slug),
+      artworkUrl: await readLocalArtworkUrl(config, slug),
       status: demo?.status ?? deriveStatus(derivedFailed, derivedQuar, running),
       episodes: demo?.episodes ?? manifests.length,
       processed: demo?.processed ?? completed.length,
       failed: demo?.failed ?? derivedFailed,
       quarantined: demo?.quarantined ?? derivedQuar,
       savedSeconds: demo?.savedSeconds ?? savedSeconds,
+      sourceSeconds,
       avgAdsPct: demo?.avgAdsPct ?? Number(avgAds.toFixed(1)),
       spend30dUsd: demo?.spend30dUsd ?? 0,
       latestRelative: demo?.latestRelative ?? relativeTime(latest?.pubDate),
@@ -270,7 +281,9 @@ export async function buildDashboard(config: AppConfig): Promise<DashboardView> 
   });
 
   const todayBudget = config.costs.dailyBudgetUsd ?? 25;
-  const avgAds = cards.length ? cards.reduce((sum, c) => sum + c.avgAdsPct, 0) / cards.length : 0;
+  const savedSeconds = cards.reduce((sum, c) => sum + c.savedSeconds, 0);
+  const sourceSeconds = cards.reduce((sum, c) => sum + c.sourceSeconds, 0);
+  const avgAds = sourceSeconds > 0 ? (savedSeconds / sourceSeconds) * 100 : 0;
 
   return {
     kpis: {
@@ -279,7 +292,7 @@ export async function buildDashboard(config: AppConfig): Promise<DashboardView> 
       processed: cards.reduce((sum, c) => sum + c.processed, 0),
       failed: cards.reduce((sum, c) => sum + c.failed, 0),
       quarantined: cards.reduce((sum, c) => sum + c.quarantined, 0),
-      savedSeconds: cards.reduce((sum, c) => sum + c.savedSeconds, 0),
+      savedSeconds,
       avgAdsPct: Number(avgAds.toFixed(1)),
       costToday: Number(today.toFixed(2)),
       costTodayBudget: todayBudget,
@@ -491,7 +504,7 @@ export async function buildEpisodeView(config: AppConfig, slug: string, episodeK
     status: manifest.audio.status,
     durSource,
     durProc,
-    saved: Math.max(0, durSource - durProc),
+    saved: savedSecondsForManifest(manifest),
     cuts: removeCount(manifest),
     marks: markCount(manifest),
     cost: manifest.costs.actualUsd,

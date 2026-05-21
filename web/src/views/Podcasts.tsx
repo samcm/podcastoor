@@ -8,7 +8,7 @@ import { useApi, useIsMobile } from "../hooks";
 function Tile({ p }: { p: PodcastCard }) {
   return (
     <Link to={`/podcasts/${p.slug}`} style={{ display: "flex", gap: 12, padding: 14 }}>
-      <SArt title={p.name} slug={p.slug} color={p.color} size={64} />
+      <SArt title={p.name} slug={p.slug} color={p.color} src={p.artworkUrl} size={64} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontWeight: 600, fontSize: 14, color: S.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>

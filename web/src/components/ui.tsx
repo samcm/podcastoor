@@ -146,11 +146,21 @@ export function SStatus({ s }: { s: string }) {
   );
 }
 
-export function SArt({ title, slug, color, size = 56 }: { title: string; slug: string; color: string; size?: number }) {
+export function SArt({ title, slug, color, src, size = 56 }: { title: string; slug: string; color: string; src?: string; size?: number }) {
   const initials = title.split(" ").slice(0, 2).map((w) => w[0]).join("");
   return (
     <div style={{ width: size, height: size, background: color, position: "relative", overflow: "hidden", flex: "0 0 auto", display: "flex", alignItems: "flex-end", padding: 6 }}>
       <div style={{ position: "absolute", inset: 0, background: `linear-gradient(135deg, ${color}, ${color}cc 40%, #00000060)` }} />
+      {src && (
+        <img
+          src={src}
+          alt={`${title} artwork`}
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      )}
       <div style={{ position: "absolute", top: 6, right: 6, ...sMono, fontSize: 9, color: "#ffffffb0" }}>{slug.slice(0, 3).toUpperCase()}</div>
       <div style={{ position: "relative", fontWeight: 700, fontSize: size * 0.32, color: "#fff", letterSpacing: -0.5, lineHeight: 1 }}>{initials}</div>
     </div>

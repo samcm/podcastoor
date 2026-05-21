@@ -7,12 +7,14 @@ export interface PodcastCard {
   name: string;
   host: string;
   color: string;
+  artworkUrl?: string;
   status: PodcastStatus;
   episodes: number;
   processed: number;
   failed: number;
   quarantined: number;
   savedSeconds: number;
+  sourceSeconds: number;
   avgAdsPct: number;
   spend30dUsd: number;
   latestRelative: string;
@@ -124,6 +126,8 @@ export interface DeepDive {
   metadata: {
     feedTitle?: string;
     description?: string;
+    sourceImageUrl?: string;
+    localArtworkUrl?: string;
     feedError?: string;
     manifestCount: number;
     processedCount: number;
