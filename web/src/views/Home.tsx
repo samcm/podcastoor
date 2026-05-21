@@ -3,7 +3,7 @@ import { S, sMono, fmtUsd, fmtHoursMinutes } from "../tokens";
 import { SPanel, SBtn, SStatus, SArt, KpiCard, Loading, ErrorNote } from "../components/ui";
 import { AddFeedButton } from "../components/AddFeedButton";
 import { api, runAdminAction, type DashboardView, type PodcastCard } from "../api";
-import { useApi, useIsMobile } from "../hooks";
+import { useAdminSession, useApi, useIsMobile } from "../hooks";
 
 const OUTCOME_COLOR: Record<string, string> = { ok: S.green, info: S.textDim, warn: S.amber, fail: S.red };
 
@@ -38,6 +38,7 @@ function PodcastTile({ p, mobile }: { p: PodcastCard; mobile: boolean }) {
 }
 
 function HomeBody({ data, mobile, reload }: { data: DashboardView; mobile: boolean; reload: () => void }) {
+  const admin = useAdminSession();
   const k = data.kpis;
   const healthy = data.podcasts.filter((p) => p.status === "ok" || p.status === "run").length;
   const attention = data.podcasts.length - healthy;
@@ -64,12 +65,14 @@ function HomeBody({ data, mobile, reload }: { data: DashboardView; mobile: boole
         title="Podcasts"
         subtitle={`${data.podcasts.length} configured · sorted by recent activity`}
         right={
-          <div style={{ display: "flex", gap: 6 }}>
+          admin.isAdmin ? (
+            <div style={{ display: "flex", gap: 6 }}>
             <AddFeedButton />
             <SBtn variant="soft" onClick={() => runAdminAction(() => api.reprocess({ scope: "global", lookbackDays: 1, downloadAudio: true }), reload)}>
               Process last 24h
             </SBtn>
-          </div>
+            </div>
+          ) : undefined
         }
       >
         <div style={{ display: "grid", gridTemplateColumns: `repeat(${mobile ? 1 : 4},1fr)` }}>
@@ -132,21 +135,18 @@ function HomeBody({ data, mobile, reload }: { data: DashboardView; mobile: boole
               </div>
             </div>
           </SPanel>
-          <SPanel title="Quick actions">
-            <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-              <SBtn variant="primary" onClick={() => runAdminAction(() => api.reprocess({ scope: "global", lookbackDays: 1, downloadAudio: true }), reload)}>
-                ▶ Process last 24h
-              </SBtn>
-              <SBtn variant="soft" onClick={() => runAdminAction(() => api.reprocess({ scope: "failed" }), reload)}>↻ Retry failed jobs</SBtn>
-              <SBtn variant="soft" onClick={() => runAdminAction(() => api.resetAttempts({ allQuarantined: true }), reload)}>⌂ Reset quarantined</SBtn>
-              <SBtn variant="ghost" onClick={() => runAdminAction(() => api.reprocess({ scope: "global" }), reload)}>↓ Re-fetch all feeds</SBtn>
-              <div style={{ ...sMono, fontSize: 10, color: S.textMute, marginTop: 6, lineHeight: 1.5 }}>
-                Mutating actions require admin token.
-                <br />
-                Tokens are scoped per-host and rotate weekly.
+          {admin.isAdmin && (
+            <SPanel title="Quick actions">
+              <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                <SBtn variant="primary" onClick={() => runAdminAction(() => api.reprocess({ scope: "global", lookbackDays: 1, downloadAudio: true }), reload)}>
+                  ▶ Process last 24h
+                </SBtn>
+                <SBtn variant="soft" onClick={() => runAdminAction(() => api.reprocess({ scope: "failed" }), reload)}>↻ Retry failed jobs</SBtn>
+                <SBtn variant="soft" onClick={() => runAdminAction(() => api.resetAttempts({ allQuarantined: true }), reload)}>⌂ Reset quarantined</SBtn>
+                <SBtn variant="ghost" onClick={() => runAdminAction(() => api.reprocess({ scope: "global" }), reload)}>↓ Re-fetch all feeds</SBtn>
               </div>
-            </div>
-          </SPanel>
+            </SPanel>
+          )}
         </div>
       </div>
       <FooterClock />

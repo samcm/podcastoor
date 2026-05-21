@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { clearAdminToken, getAdminToken, onAdminTokenChange, promptForAdminToken } from "./api";
 
 export function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState<boolean>(() => (typeof window !== "undefined" ? window.matchMedia(query).matches : false));
@@ -14,6 +15,24 @@ export function useMediaQuery(query: string): boolean {
 
 export function useIsMobile(): boolean {
   return useMediaQuery("(max-width: 860px)");
+}
+
+export function useAdminSession() {
+  const [token, setToken] = useState(() => (typeof window !== "undefined" ? getAdminToken() : ""));
+
+  useEffect(() => onAdminTokenChange(() => setToken(getAdminToken())), []);
+
+  const login = useCallback(() => {
+    const next = promptForAdminToken();
+    if (next) setToken(next);
+  }, []);
+
+  const logout = useCallback(() => {
+    clearAdminToken();
+    setToken("");
+  }, []);
+
+  return { isAdmin: token.trim().length > 0, login, logout };
 }
 
 interface AsyncState<T> {

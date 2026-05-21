@@ -288,7 +288,9 @@ export interface AudioRenderResult {
   sourceDurationSeconds?: number;
   durationSeconds?: number;
   removedSeconds: number;
+  renderedCuts?: Array<{ start: number; end: number }>;
   jingleInsertedCount: number;
+  jingleDurationSeconds?: number;
   renderMode?: "source-copy" | "encode" | "dry-run";
   codec?: string;
   bitrateKbps?: number;

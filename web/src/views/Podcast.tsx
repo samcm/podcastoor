@@ -3,7 +3,7 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import { S, sMono, fmtTime, fmtDur, fmtHoursMinutes, fmtUsd, relativeFromIso } from "../tokens";
 import { SPanel, SBtn, SStatus, SArt, Loading, ErrorNote } from "../components/ui";
 import { api, runAdminAction, type DeepDive, type DeepDiveEpisode } from "../api";
-import { useApi, useIsMobile } from "../hooks";
+import { useAdminSession, useApi, useIsMobile } from "../hooks";
 
 function episodeNumber(ep: DeepDiveEpisode): number {
   const m = /-ep-(\d+)/.exec(ep.guid ?? "") ?? /(\d+)/.exec(ep.title);
@@ -46,6 +46,7 @@ function ReprocessOptions({ options, setOptions }: { options: Record<string, boo
 
 function PodcastBody({ data, mobile, reload }: { data: DeepDive; mobile: boolean; reload: () => void }) {
   const navigate = useNavigate();
+  const admin = useAdminSession();
   const [options, setOptions] = useState<Record<string, boolean>>({ reuseTranscript: true });
   const demo = data.demo ?? {};
   const accent = data.accentColor ?? S.accent;
@@ -91,7 +92,7 @@ function PodcastBody({ data, mobile, reload }: { data: DeepDive; mobile: boolean
         <div style={{ flex: 1 }} />
         <SBtn variant="ghost"><a href={data.feedUrl} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>Open original feed ↗</a></SBtn>
         <SBtn variant="soft" onClick={() => navigator.clipboard?.writeText(data.subscriptionUrl)}>Copy proxied URL</SBtn>
-        <SBtn variant="primary" onClick={() => runAdminAction(() => api.reprocess({ scope: "podcast", podcastSlug: data.slug, force: true }), reload)}>▶ Reprocess all</SBtn>
+        {admin.isAdmin && <SBtn variant="primary" onClick={() => runAdminAction(() => api.reprocess({ scope: "podcast", podcastSlug: data.slug, force: true }), reload)}>▶ Reprocess all</SBtn>}
       </div>
 
       <SPanel>
@@ -178,17 +179,19 @@ function PodcastBody({ data, mobile, reload }: { data: DeepDive; mobile: boolean
               ))}
             </div>
           </SPanel>
-          <SPanel title="Manual actions">
-            <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-              <SBtn variant="primary" onClick={() => runAdminAction(() => api.reprocess({ ...podcastBody, maxEpisodes: 1 }), reload)}>▶ Reprocess latest</SBtn>
-              <SBtn variant="soft" onClick={() => runAdminAction(() => api.resetAttempts({ podcastSlug: data.slug }), reload)}>↻ Retry failed</SBtn>
-              <SBtn variant="soft" onClick={() => runAdminAction(() => api.resetAttempts({ podcastSlug: data.slug, allQuarantined: true }), reload)}>⌂ Reset quarantined</SBtn>
-              <SBtn variant="ghost" onClick={() => runAdminAction(() => api.reprocess({ scope: "podcast", podcastSlug: data.slug }), reload)}>↓ Re-fetch feed</SBtn>
-              <SBtn variant="ghost" onClick={() => runAdminAction(() => api.reprocess({ scope: "podcast", podcastSlug: data.slug }), reload)}>⌗ Regenerate proxied feed</SBtn>
-              <SBtn variant="danger">⊘ Pause podcast</SBtn>
-              <ReprocessOptions options={options} setOptions={setOptions} />
-            </div>
-          </SPanel>
+          {admin.isAdmin && (
+            <SPanel title="Manual actions">
+              <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                <SBtn variant="primary" onClick={() => runAdminAction(() => api.reprocess({ ...podcastBody, maxEpisodes: 1 }), reload)}>▶ Reprocess latest</SBtn>
+                <SBtn variant="soft" onClick={() => runAdminAction(() => api.resetAttempts({ podcastSlug: data.slug }), reload)}>↻ Retry failed</SBtn>
+                <SBtn variant="soft" onClick={() => runAdminAction(() => api.resetAttempts({ podcastSlug: data.slug, allQuarantined: true }), reload)}>⌂ Reset quarantined</SBtn>
+                <SBtn variant="ghost" onClick={() => runAdminAction(() => api.reprocess({ scope: "podcast", podcastSlug: data.slug }), reload)}>↓ Re-fetch feed</SBtn>
+                <SBtn variant="ghost" onClick={() => runAdminAction(() => api.reprocess({ scope: "podcast", podcastSlug: data.slug }), reload)}>⌗ Regenerate proxied feed</SBtn>
+                <SBtn variant="danger">⊘ Pause podcast</SBtn>
+                <ReprocessOptions options={options} setOptions={setOptions} />
+              </div>
+            </SPanel>
+          )}
         </div>
       </div>
     </div>

@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import { S, sMono, fmtUsd } from "../tokens";
 import { SDot } from "./ui";
 import { api } from "../api";
-import { useIsMobile } from "../hooks";
+import { useAdminSession, useIsMobile } from "../hooks";
 
 const NAV: Array<{ id: string; label: string; path: string; icon: string }> = [
   { id: "home", label: "Dashboard", path: "/", icon: "M3 9l6-5 6 5v6H3z" },
@@ -113,6 +113,39 @@ function isActive(id: string, pathname: string): boolean {
   return false;
 }
 
+function AdminButton({ compact = false }: { compact?: boolean }) {
+  const admin = useAdminSession();
+  const color = admin.isAdmin ? S.accent : S.textDim;
+  return (
+    <button
+      type="button"
+      title={admin.isAdmin ? "Log out admin" : "Log in admin"}
+      onClick={admin.isAdmin ? admin.logout : admin.login}
+      style={{
+        width: compact ? "auto" : 44,
+        minWidth: compact ? 0 : 44,
+        height: compact ? "auto" : 44,
+        borderRadius: 2,
+        background: admin.isAdmin ? `${S.accent}14` : "transparent",
+        border: `1px solid ${admin.isAdmin ? `${S.accent}55` : S.border}`,
+        color,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 3,
+        padding: compact ? "8px 10px" : 0,
+        cursor: "pointer",
+      }}
+    >
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth={1.4}>
+        <path d={admin.isAdmin ? "M5 8V6a4 4 0 118 0v2M4 8h10v7H4z" : "M6 8V6a3 3 0 016 0M4 8h10v7H4z"} />
+      </svg>
+      <span style={{ fontSize: 9, letterSpacing: 0.3, textTransform: "uppercase" }}>{admin.isAdmin ? "Admin" : "Login"}</span>
+    </button>
+  );
+}
+
 function Rail({ pathname }: { pathname: string }) {
   return (
     <div style={{ width: 64, borderRight: `1px solid ${S.border}`, background: S.panel, display: "flex", flexDirection: "column", alignItems: "center", padding: "12px 0", gap: 6, flex: "0 0 auto", position: "sticky", top: 42, alignSelf: "flex-start", height: "calc(100dvh - 42px)", overflowY: "auto" }}>
@@ -145,6 +178,7 @@ function Rail({ pathname }: { pathname: string }) {
         );
       })}
       <div style={{ flex: 1 }} />
+      <AdminButton />
       <div style={{ ...sMono, fontSize: 9, color: S.textMute, writingMode: "vertical-rl", transform: "rotate(180deg)", marginBottom: 8 }}>host: studio-01</div>
     </div>
   );
@@ -168,6 +202,7 @@ function BottomNav({ pathname }: { pathname: string }) {
           </Link>
         );
       })}
+      <AdminButton compact />
     </div>
   );
 }

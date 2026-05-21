@@ -75,7 +75,9 @@ export async function renderEpisodeAudio(params: {
     return {
       status: "dry-run",
       removedSeconds,
+      renderedCuts: removed,
       jingleInsertedCount: params.config.audio.jingle.enabled ? removed.length : 0,
+      jingleDurationSeconds: params.config.audio.jingle.enabled ? params.config.audio.jingle.durationSeconds : 0,
       sourceDurationSeconds: params.originalDurationSeconds,
       durationSeconds: params.originalDurationSeconds,
       renderMode: "dry-run"
@@ -108,7 +110,9 @@ export async function renderEpisodeAudio(params: {
       sourceDurationSeconds: sourceDuration,
       durationSeconds: sourceDuration,
       removedSeconds: 0,
+      renderedCuts: [],
       jingleInsertedCount: 0,
+      jingleDurationSeconds: 0,
       renderMode: "source-copy",
       codec: sourceInfo.codec,
       bitrateKbps: sourceInfo.bitrateKbps
@@ -119,6 +123,7 @@ export async function renderEpisodeAudio(params: {
   const keeps = keepSegments(sourceDuration, removed);
   const outputBitrateKbps = Math.max(sourceInfo.bitrateKbps ?? 0, params.config.audio.outputBitrateKbps);
   const jingleInsertedCount = params.config.audio.jingle.enabled ? Math.max(0, keeps.length - 1) : 0;
+  const jingleDurationSeconds = params.config.audio.jingle.enabled ? params.config.audio.jingle.durationSeconds : 0;
 
   await renderAccurateEdit(paths.sourceAudio, paths.processedAudio, keeps, params.config, {
     bitrateKbps: outputBitrateKbps,
@@ -133,7 +138,9 @@ export async function renderEpisodeAudio(params: {
     sourceDurationSeconds: sourceDuration,
     durationSeconds: await probeDuration(paths.processedAudio),
     removedSeconds,
+    renderedCuts: removed,
     jingleInsertedCount,
+    jingleDurationSeconds,
     renderMode: "encode",
     codec: sourceInfo.codec,
     bitrateKbps: outputBitrateKbps

@@ -3,8 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { S, sMono } from "../tokens";
 import { SBtn } from "./ui";
 import { api, ensureAdminToken } from "../api";
+import { useAdminSession } from "../hooks";
 
 export function AddFeedButton({ variant = "ghost" }: { variant?: "ghost" | "soft" | "primary" }) {
+  const { isAdmin } = useAdminSession();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -48,6 +50,8 @@ export function AddFeedButton({ variant = "ghost" }: { variant?: "ghost" | "soft
     outline: "none",
     width: "100%",
   } as const;
+
+  if (!isAdmin) return null;
 
   return (
     <>

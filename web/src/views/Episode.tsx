@@ -2,8 +2,8 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "
 import { Link, useParams } from "react-router-dom";
 import { S, sMono, fmtTime, fmtDur } from "../tokens";
 import { SPanel, SBtn, SStatus, SArt, Loading, ErrorNote } from "../components/ui";
-import { api, type EpisodeView } from "../api";
-import { useApi, useIsMobile } from "../hooks";
+import { api, runAdminAction, type EpisodeView } from "../api";
+import { useAdminSession, useApi, useIsMobile } from "../hooks";
 
 type Kind = "source" | "processed";
 type DecisionRow = EpisodeView["decisions"][number];
@@ -238,6 +238,7 @@ function DecisionDetail({ d, onSeek }: { d: DecisionRow; onSeek: (kind: Kind, se
 }
 
 function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
+  const admin = useAdminSession();
   const audioRefs = {
     source: useRef<HTMLAudioElement>(null),
     processed: useRef<HTMLAudioElement>(null),
@@ -247,6 +248,7 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
   const [times, setTimes] = useState<Record<Kind, number>>({ source: 0, processed: 0 });
   const [expandedDecisions, setExpandedDecisions] = useState<Set<number>>(() => new Set());
   const [transcriptFollowPaused, setTranscriptFollowPaused] = useState(readTranscriptFollowPaused);
+  const transcriptScrollRef = useRef<HTMLDivElement | null>(null);
   const transcriptRowRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   const audioFor = (kind: Kind) => audioRefs[kind].current;
@@ -299,7 +301,13 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
   );
   useEffect(() => {
     if (transcriptFollowPaused || activeTranscriptIndex < 0) return;
-    transcriptRowRefs.current[activeTranscriptIndex]?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const container = transcriptScrollRef.current;
+    const row = transcriptRowRefs.current[activeTranscriptIndex];
+    if (!container || !row) return;
+    const containerRect = container.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const targetTop = container.scrollTop + rowRect.top - containerRect.top - container.clientHeight / 2 + row.clientHeight / 2;
+    container.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
   }, [activeTranscriptIndex, transcriptFollowPaused]);
   const seekTranscriptRow = (row: TranscriptRow) => {
     const kind: Kind = activeTranscriptKind === "source" || row.proc === null ? "source" : "processed";
@@ -318,10 +326,20 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
     <div style={{ padding: mobile ? 10 : 14, gap: 10, display: "flex", flexDirection: "column" }}>
       <audio
         ref={audioRefs.source}
+        data-audio-kind="source"
         src={ep.links.sourceAudio}
         preload="metadata"
+        onPlay={() => {
+          setActiveKind("source");
+          setPlaying("source");
+        }}
         onTimeUpdate={(event) => {
           const time = event.currentTarget.currentTime;
+          setTimes((current) => ({ ...current, source: time }));
+        }}
+        onSeeking={(event) => {
+          const time = event.currentTarget.currentTime;
+          setActiveKind("source");
           setTimes((current) => ({ ...current, source: time }));
         }}
         onPause={() => setPlaying((current) => (current === "source" ? null : current))}
@@ -329,10 +347,20 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
       />
       <audio
         ref={audioRefs.processed}
+        data-audio-kind="processed"
         src={ep.links.processedAudio}
         preload="metadata"
+        onPlay={() => {
+          setActiveKind("processed");
+          setPlaying("processed");
+        }}
         onTimeUpdate={(event) => {
           const time = event.currentTarget.currentTime;
+          setTimes((current) => ({ ...current, processed: time }));
+        }}
+        onSeeking={(event) => {
+          const time = event.currentTarget.currentTime;
+          setActiveKind("processed");
           setTimes((current) => ({ ...current, processed: time }));
         }}
         onPause={() => setPlaying((current) => (current === "processed" ? null : current))}
@@ -350,7 +378,11 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
         <SBtn variant="ghost"><a href={ep.links.transcriptJson} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>Transcript JSON</a></SBtn>
         <SBtn variant="ghost"><a href={ep.links.transcriptVtt} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>VTT</a></SBtn>
         <SBtn variant="ghost"><a href={ep.links.chaptersJson} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>Chapters JSON</a></SBtn>
-        <SBtn variant="primary">▶ Reprocess</SBtn>
+        {admin.isAdmin && (
+          <SBtn variant="primary" onClick={() => runAdminAction(() => api.reprocess({ scope: "episode", podcastSlug: ep.podcastSlug, episodeKey: ep.episodeKey, force: true }))}>
+            ▶ Reprocess
+          </SBtn>
+        )}
       </div>
 
       <SPanel>
@@ -466,7 +498,7 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
               </>
             }
           >
-            <div style={{ overflow: "auto", maxHeight: 360 }}>
+            <div ref={transcriptScrollRef} data-transcript-scroll="true" style={{ overflow: "auto", maxHeight: 360, overscrollBehavior: "contain" }}>
               {ep.transcript.map((r, i) => {
                 const cmap: Record<string, string> = { kept: S.textDim, removed: S.red, partial: S.amber };
                 const active = i === activeTranscriptIndex;
@@ -477,6 +509,9 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
                     ref={(node) => {
                       transcriptRowRefs.current[i] = node;
                     }}
+                    data-transcript-row={i}
+                    data-transcript-active={active ? "true" : undefined}
+                    data-transcript-kind={activeTranscriptKind}
                     aria-current={active ? "true" : undefined}
                     onClick={() => seekTranscriptRow(r)}
                     style={{

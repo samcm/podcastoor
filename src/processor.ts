@@ -585,7 +585,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     originalDurationSeconds: episode.durationSeconds,
     processedDurationSeconds: audio.durationSeconds ?? processedDuration,
     decisions: detection.decisions,
-    renderedCuts: removed,
+    renderedCuts: audio.renderedCuts ?? removed,
     untimedSignals: detection.untimedSignals,
     modelNotes: detection.modelNotes,
     sourceChapters: normalizeChapters(episode.chapters),

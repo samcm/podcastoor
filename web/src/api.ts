@@ -195,22 +195,55 @@ async function getJson<T>(url: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-const ADMIN_TOKEN_KEY = "podcastoor.adminToken";
+export const ADMIN_TOKEN_KEY = "podcastoor.adminToken";
+export const ADMIN_TOKEN_EVENT = "podcastoor:admin-token";
+
+function emitAdminTokenChange(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(ADMIN_TOKEN_EVENT));
+}
 
 export function getAdminToken(): string {
   return localStorage.getItem(ADMIN_TOKEN_KEY) ?? "";
 }
 
+export function hasAdminToken(): boolean {
+  return getAdminToken().trim().length > 0;
+}
+
 export function setAdminToken(token: string): void {
   if (token) localStorage.setItem(ADMIN_TOKEN_KEY, token);
   else localStorage.removeItem(ADMIN_TOKEN_KEY);
+  emitAdminTokenChange();
+}
+
+export function clearAdminToken(): void {
+  localStorage.removeItem(ADMIN_TOKEN_KEY);
+  emitAdminTokenChange();
+}
+
+export function promptForAdminToken(): string | undefined {
+  const token = window.prompt("Admin token")?.trim() ?? "";
+  if (token) setAdminToken(token);
+  return token || undefined;
+}
+
+export function onAdminTokenChange(listener: () => void): () => void {
+  const storageHandler = (event: StorageEvent) => {
+    if (event.key === ADMIN_TOKEN_KEY) listener();
+  };
+  window.addEventListener(ADMIN_TOKEN_EVENT, listener);
+  window.addEventListener("storage", storageHandler);
+  return () => {
+    window.removeEventListener(ADMIN_TOKEN_EVENT, listener);
+    window.removeEventListener("storage", storageHandler);
+  };
 }
 
 export function ensureAdminToken(): string | undefined {
   let token = getAdminToken();
   if (!token) {
-    token = window.prompt("Admin token required for this action") ?? "";
-    if (token) setAdminToken(token);
+    token = promptForAdminToken() ?? "";
   }
   return token || undefined;
 }

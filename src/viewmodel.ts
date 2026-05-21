@@ -8,7 +8,7 @@ import { loadRuntimeOverrides } from "./runtime-overrides.js";
 import { getAutomationState } from "./automation.js";
 import { readJson } from "./utils.js";
 import { resolvePodcastConfig } from "./config.js";
-import { durationAfterEdits, mapOriginalToProcessed, normalizeSegments, removalSegments } from "./timeline.js";
+import { durationAfterEdits, mapOriginalToProcessed, normalizeSegments, removalSegments, type Segment } from "./timeline.js";
 
 const FALLBACK_PALETTE = ["#e8743a", "#9c6dd8", "#6b9bb8", "#d8a23f", "#e85a47", "#5ab886", "#8492a8", "#c66b4e"];
 
@@ -223,6 +223,10 @@ function sourceSecondsForManifest(manifest: EpisodeManifest): number {
 
 function savedSecondsForManifest(manifest: EpisodeManifest): number {
   return Math.max(0, manifest.audio.removedSeconds ?? 0);
+}
+
+function seconds3(value: number): number {
+  return Number(value.toFixed(3));
 }
 
 async function buildPodcastCards(config: AppConfig): Promise<PodcastCard[]> {
@@ -479,22 +483,27 @@ export async function buildEpisodeView(config: AppConfig, slug: string, episodeK
   if (!manifest) return undefined;
   const effective = resolvePodcastConfig(config, slug);
   const confidence = effective.processing.confidenceThreshold;
-  const durSource = manifest.originalDurationSeconds ?? manifest.audio.sourceDurationSeconds ?? 0;
-  const removed = normalizeSegments(removalSegments(manifest.decisions, confidence), {
-    durationSeconds: durSource,
-    prePaddingSeconds: effective.detection.prePaddingSeconds,
-    postPaddingSeconds: effective.detection.postPaddingSeconds,
-    minSegmentSeconds: effective.detection.minSegmentSeconds,
-    maxSegmentSeconds: effective.detection.maxSegmentSeconds,
-  });
-  const jingle = effective.audio.jingle.enabled ? effective.audio.jingle.durationSeconds : 0;
+  const transcript = await readJson<Transcript>(episodePaths(config, slug, episodeKey).transcriptJson);
+  const transcriptDuration = transcript?.segments.at(-1)?.end;
+  const durSource = Math.max(manifest.audio.sourceDurationSeconds ?? 0, manifest.originalDurationSeconds ?? 0, transcriptDuration ?? 0);
+  const persistedCuts = manifest.audio.renderedCuts ?? manifest.renderedCuts;
+  const removed: Segment[] = persistedCuts
+    ? normalizeSegments(persistedCuts, { durationSeconds: durSource })
+    : normalizeSegments(removalSegments(manifest.decisions, confidence), {
+        durationSeconds: durSource,
+        prePaddingSeconds: effective.detection.prePaddingSeconds,
+        postPaddingSeconds: effective.detection.postPaddingSeconds,
+        minSegmentSeconds: effective.detection.minSegmentSeconds,
+        maxSegmentSeconds: effective.detection.maxSegmentSeconds,
+      });
+  const jingle = manifest.audio.jingleDurationSeconds ?? (manifest.audio.jingleInsertedCount > 0 ? effective.audio.jingle.durationSeconds : 0);
   const durProc = manifest.processedDurationSeconds ?? manifest.audio.durationSeconds ?? durationAfterEdits(durSource, removed, jingle) ?? 0;
 
   const decisions = manifest.decisions.map((d, index) => ({
     i: index + 1,
-    src0: d.start,
-    src1: d.end,
-    proc: Math.round(mapOriginalToProcessed(d.start, removed, jingle)),
+    src0: seconds3(d.start),
+    src1: seconds3(d.end),
+    proc: seconds3(mapOriginalToProcessed(d.start, removed, jingle)),
     dur: Math.round(d.end - d.start),
     action: d.action === "remove" ? ("remove" as const) : ("mark" as const),
     conf: d.confidence,
@@ -506,16 +515,15 @@ export async function buildEpisodeView(config: AppConfig, slug: string, episodeK
     alignment: d.alignment,
   }));
 
-  const transcript = await readJson<Transcript>(episodePaths(config, slug, episodeKey).transcriptJson);
   const transcriptRows = (transcript?.segments ?? []).map((segment) => {
     const removedOverlap = removed.some((r) => segment.start < r.end && segment.end > r.start);
     const markOverlap = manifest.decisions.some((d) => d.action === "mark-only" && segment.start < d.end && segment.end > d.start);
     const status: "kept" | "removed" | "partial" = removedOverlap ? "removed" : markOverlap ? "partial" : "kept";
     return {
-      src: Math.round(segment.start),
-      srcEnd: Math.round(segment.end),
-      proc: status === "removed" ? null : Math.round(mapOriginalToProcessed(segment.start, removed, jingle)),
-      procEnd: status === "removed" ? null : Math.round(mapOriginalToProcessed(segment.end, removed, jingle)),
+      src: seconds3(segment.start),
+      srcEnd: seconds3(segment.end),
+      proc: status === "removed" ? null : seconds3(mapOriginalToProcessed(segment.start, removed, jingle)),
+      procEnd: status === "removed" ? null : seconds3(mapOriginalToProcessed(segment.end, removed, jingle)),
       status,
       text: segment.text,
     };

@@ -1,7 +1,7 @@
 import { S, sMono, fmtHm } from "../tokens";
 import { SPanel, SBtn, SStatus, SDot, Loading, ErrorNote } from "../components/ui";
 import { api, runAdminAction, type QueueRow } from "../api";
-import { useApi, useIsMobile } from "../hooks";
+import { useAdminSession, useApi, useIsMobile } from "../hooks";
 
 const CHIPS: Array<[string, string]> = [
   ["running", S.blue],
@@ -21,7 +21,8 @@ function retryLabel(row: QueueRow): string {
   return row.nextRetryAt ? fmtHm(row.nextRetryAt) : "—";
 }
 
-function RowActions({ row, reload }: { row: QueueRow; reload: () => void }) {
+function RowActions({ row, reload, isAdmin }: { row: QueueRow; reload: () => void; isAdmin: boolean }) {
+  if (!isAdmin) return row.state === "failed" || row.state === "quarantined" ? <SBtn variant="ghost">⌗ logs</SBtn> : null;
   const slug = row.podcastSlug;
   const ep = row.episodeTitle;
   if (row.state === "failed")
@@ -46,6 +47,7 @@ function RowActions({ row, reload }: { row: QueueRow; reload: () => void }) {
 }
 
 function QueueBody({ rows, mobile, reload }: { rows: QueueRow[]; mobile: boolean; reload: () => void }) {
+  const admin = useAdminSession();
   const counts: Record<string, number> = {};
   for (const r of rows) counts[r.state] = (counts[r.state] ?? 0) + 1;
 
@@ -56,8 +58,12 @@ function QueueBody({ rows, mobile, reload }: { rows: QueueRow[]; mobile: boolean
         <span style={{ ...sMono, fontSize: 10, color: S.textMute, marginLeft: 6 }}>showing {rows.length} jobs</span>
         <div style={{ flex: 1 }} />
         <SBtn variant="ghost" onClick={reload}>↻ Refresh</SBtn>
-        <SBtn variant="soft">⏸ Pause queue</SBtn>
-        <SBtn variant="primary" onClick={() => runAdminAction(() => api.reprocess({ scope: "failed" }), reload)}>▶ Drain retry pool</SBtn>
+        {admin.isAdmin && (
+          <>
+            <SBtn variant="soft">⏸ Pause queue</SBtn>
+            <SBtn variant="primary" onClick={() => runAdminAction(() => api.reprocess({ scope: "failed" }), reload)}>▶ Drain retry pool</SBtn>
+          </>
+        )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${mobile ? 2 : 6},1fr)`, gap: 8 }}>
@@ -101,7 +107,7 @@ function QueueBody({ rows, mobile, reload }: { rows: QueueRow[]; mobile: boolean
                     <td style={{ padding: "8px 10px", color: retryLabel(r) === "manual" ? S.red : retryLabel(r) === "—" ? S.textMute : S.textDim }}>{retryLabel(r)}</td>
                     <td style={{ padding: "8px 10px", color: S.textMute, fontSize: 10 }}>{r.model}</td>
                     <td style={{ padding: "8px 10px", color: S.red, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.lastError || <span style={{ color: S.textMute }}>—</span>}</td>
-                    <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}><RowActions row={r} reload={reload} /></td>
+                    <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}><RowActions row={r} reload={reload} isAdmin={admin.isAdmin} /></td>
                   </tr>
                 );
               })}
