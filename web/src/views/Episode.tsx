@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { S, sMono, fmtTime, fmtDur } from "../tokens";
 import { SPanel, SBtn, SStatus, SArt, Loading, ErrorNote } from "../components/ui";
@@ -6,6 +6,10 @@ import { api, type EpisodeView } from "../api";
 import { useApi, useIsMobile } from "../hooks";
 
 type Kind = "source" | "processed";
+type DecisionRow = EpisodeView["decisions"][number];
+type TranscriptRow = EpisodeView["transcript"][number];
+
+const TRANSCRIPT_FOLLOW_PAUSED_KEY = "podcastoor.transcriptFollowPaused";
 
 function Waveform({ kind }: { kind: Kind }) {
   return (
@@ -43,6 +47,36 @@ function TimeButton({ value, muted = false, onClick }: { value: number; muted?: 
       {fmtTime(value)}
     </button>
   );
+}
+
+function readTranscriptFollowPaused(): boolean {
+  return typeof window !== "undefined" && window.localStorage.getItem(TRANSCRIPT_FOLLOW_PAUSED_KEY) === "1";
+}
+
+function writeTranscriptFollowPaused(paused: boolean): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(TRANSCRIPT_FOLLOW_PAUSED_KEY, paused ? "1" : "0");
+}
+
+function transcriptStart(row: TranscriptRow, kind: Kind): number | null {
+  return kind === "source" ? row.src : row.proc;
+}
+
+function transcriptEnd(row: TranscriptRow, kind: Kind): number | null {
+  return kind === "source" ? row.srcEnd : row.procEnd;
+}
+
+function findActiveTranscriptIndex(rows: TranscriptRow[], kind: Kind, seconds: number): number {
+  let nearest = -1;
+  for (let i = 0; i < rows.length; i += 1) {
+    const start = transcriptStart(rows[i], kind);
+    if (start === null) continue;
+    const end = Math.max(start + 0.5, transcriptEnd(rows[i], kind) ?? start + 0.5);
+    if (seconds >= start) nearest = i;
+    if (seconds >= start && seconds < end) return i;
+    if (start > seconds && nearest >= 0) break;
+  }
+  return nearest;
 }
 
 function Timeline({ ep, kind, currentTime, onSeek }: { ep: EpisodeView; kind: Kind; currentTime: number; onSeek: (kind: Kind, seconds: number) => void }) {
@@ -152,16 +186,72 @@ function Legend() {
   );
 }
 
+function DetailField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ ...sMono, fontSize: 9, letterSpacing: 1, color: S.textMute, textTransform: "uppercase", marginBottom: 3 }}>{label}</div>
+      <div style={{ color: S.text, fontSize: 12, lineHeight: 1.45, overflowWrap: "anywhere" }}>{children}</div>
+    </div>
+  );
+}
+
+function DecisionDetail({ d, onSeek }: { d: DecisionRow; onSeek: (kind: Kind, seconds: number, play?: boolean) => void }) {
+  const alignment = d.alignment;
+  return (
+    <td colSpan={10} style={{ padding: 0, background: S.panelHi, borderTop: `1px solid ${S.borderHi}` }}>
+      <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+          <DetailField label="Source window">
+            <TimeButton value={d.src0} onClick={() => onSeek("source", d.src0, true)} /> <span style={{ color: S.textMute }}>to</span>{" "}
+            <TimeButton value={d.src1} onClick={() => onSeek("source", d.src1, true)} /> <span style={{ color: S.textMute }}>({fmtDur(d.src1 - d.src0)})</span>
+          </DetailField>
+          <DetailField label="Processed splice">
+            <TimeButton value={d.proc} onClick={() => onSeek("processed", d.proc, true)} />
+          </DetailField>
+          <DetailField label="Decision">{d.action}</DetailField>
+          <DetailField label="Confidence">{Math.round(d.conf * 100)}%</DetailField>
+          <DetailField label="Advertiser">{d.who}</DetailField>
+          <DetailField label="Detector">{d.source}</DetailField>
+          <DetailField label="Boundary method">{alignment?.method ?? d.method}</DetailField>
+          <DetailField label="Segment indexes">
+            {alignment?.startSegmentIndex ?? "—"} <span style={{ color: S.textMute }}>to</span> {alignment?.endSegmentIndex ?? "—"}
+          </DetailField>
+        </div>
+
+        <DetailField label="Reason">{d.reason || "—"}</DetailField>
+
+        {(alignment?.startAnchorText || alignment?.endAnchorText) && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <DetailField label="Start anchor">{alignment.startAnchorText ?? "—"}</DetailField>
+            <DetailField label="End anchor">{alignment.endAnchorText ?? "—"}</DetailField>
+          </div>
+        )}
+
+        {d.text && <DetailField label="Matched text">{d.text}</DetailField>}
+
+        <pre style={{ margin: 0, padding: 10, border: `1px solid ${S.border}`, background: S.bg, color: S.textDim, overflow: "auto", maxHeight: 220, ...sMono, fontSize: 10.5, lineHeight: 1.45 }}>
+          {JSON.stringify(d, null, 2)}
+        </pre>
+      </div>
+    </td>
+  );
+}
+
 function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
   const audioRefs = {
     source: useRef<HTMLAudioElement>(null),
     processed: useRef<HTMLAudioElement>(null),
   };
   const [playing, setPlaying] = useState<Kind | null>(null);
+  const [activeKind, setActiveKind] = useState<Kind>("processed");
   const [times, setTimes] = useState<Record<Kind, number>>({ source: 0, processed: 0 });
+  const [expandedDecisions, setExpandedDecisions] = useState<Set<number>>(() => new Set());
+  const [transcriptFollowPaused, setTranscriptFollowPaused] = useState(readTranscriptFollowPaused);
+  const transcriptRowRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   const audioFor = (kind: Kind) => audioRefs[kind].current;
   const seek = (kind: Kind, seconds: number, play = false) => {
+    setActiveKind(kind);
     const audio = audioFor(kind);
     if (!audio) return;
     const duration = kind === "source" ? ep.durSource : ep.durProc;
@@ -175,6 +265,7 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
     }
   };
   const toggle = (kind: Kind) => {
+    setActiveKind(kind);
     const audio = audioFor(kind);
     if (!audio) return;
     if (playing === kind && !audio.paused) {
@@ -185,6 +276,34 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
     const other = kind === "source" ? audioRefs.processed.current : audioRefs.source.current;
     other?.pause();
     void audio.play().then(() => setPlaying(kind)).catch(() => setPlaying(null));
+  };
+  const toggleDecisionExpanded = (decisionIndex: number) => {
+    setExpandedDecisions((current) => {
+      const next = new Set(current);
+      if (next.has(decisionIndex)) next.delete(decisionIndex);
+      else next.add(decisionIndex);
+      return next;
+    });
+  };
+  const toggleTranscriptFollow = () => {
+    setTranscriptFollowPaused((current) => {
+      const next = !current;
+      writeTranscriptFollowPaused(next);
+      return next;
+    });
+  };
+  const activeTranscriptKind = playing ?? activeKind;
+  const activeTranscriptIndex = useMemo(
+    () => findActiveTranscriptIndex(ep.transcript, activeTranscriptKind, times[activeTranscriptKind]),
+    [ep.transcript, activeTranscriptKind, times]
+  );
+  useEffect(() => {
+    if (transcriptFollowPaused || activeTranscriptIndex < 0) return;
+    transcriptRowRefs.current[activeTranscriptIndex]?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [activeTranscriptIndex, transcriptFollowPaused]);
+  const seekTranscriptRow = (row: TranscriptRow) => {
+    const kind: Kind = activeTranscriptKind === "source" || row.proc === null ? "source" : "processed";
+    seek(kind, kind === "source" ? row.src : row.proc ?? row.src, true);
   };
 
   const headStats: Array<[string, string, string]> = [
@@ -272,7 +391,7 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
             <table style={{ width: "100%", borderCollapse: "collapse", ...sMono, fontSize: 10.5 }}>
               <thead>
                 <tr style={{ background: S.panelHi, borderBottom: `1px solid ${S.border}` }}>
-                  {["#", "Source", "→ Out", "Dur", "Action", "Conf", "Entity", "Reason", "Method"].map((h, i) => (
+                  {["#", "Source", "→ Out", "Dur", "Action", "Conf", "Entity", "Reason", "Method", ""].map((h, i) => (
                     <th key={i} style={{ padding: "6px 8px", textAlign: "left", fontSize: 9, letterSpacing: 1, color: S.textMute, textTransform: "uppercase", fontWeight: 500, position: "sticky", top: 0, background: S.panelHi }}>{h}</th>
                   ))}
                 </tr>
@@ -281,30 +400,51 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
                 {ep.decisions.map((d) => {
                   const partial = d.conf < 0.7;
                   const col = d.action === "remove" ? S.red : S.amber;
+                  const expanded = expandedDecisions.has(d.i);
                   return (
-                    <tr
-                      key={d.i}
-                      onClick={() => seek("source", d.src0, true)}
-                      style={{ borderBottom: `1px solid ${S.border}`, background: d.action === "mark" ? `${S.amber}08` : "transparent", cursor: "pointer" }}
-                    >
-                      <td style={{ padding: "6px 8px", color: S.textMute }}>{d.i}</td>
-                      <td style={{ padding: "6px 8px", color: S.text }}>
-                        <TimeButton value={d.src0} onClick={() => seek("source", d.src0, true)} />
-                        <span style={{ color: S.textMute }}>–</span>
-                        <TimeButton value={d.src1} onClick={() => seek("source", d.src1, true)} />
-                      </td>
-                      <td style={{ padding: "6px 8px", color: d.action === "remove" ? S.textMute : S.text }}>
-                        {d.action === "remove" ? "—" : <TimeButton value={d.proc} onClick={() => seek("processed", d.proc, true)} />}
-                      </td>
-                      <td style={{ padding: "6px 8px", color: S.textDim }}>{d.dur}s</td>
-                      <td style={{ padding: "6px 8px" }}>
-                        <span style={{ color: col, ...sMono, fontSize: 9.5, border: `1px solid ${col}50`, padding: "1px 5px", textTransform: "uppercase", letterSpacing: 0.8 }}>{d.action}</span>
-                      </td>
-                      <td style={{ padding: "6px 8px", color: partial ? S.amber : S.textDim }}>{d.conf.toFixed(2)}</td>
-                      <td style={{ padding: "6px 8px", color: S.text, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.who}</td>
-                      <td style={{ padding: "6px 8px", color: S.textDim, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.reason}</td>
-                      <td style={{ padding: "6px 8px", color: S.textMute, fontSize: 9.5 }}>{d.method}</td>
-                    </tr>
+                    <Fragment key={d.i}>
+                      <tr
+                        onClick={() => seek("source", d.src0, true)}
+                        style={{ borderBottom: expanded ? "none" : `1px solid ${S.border}`, background: expanded ? `${S.blue}08` : d.action === "mark" ? `${S.amber}08` : "transparent", cursor: "pointer" }}
+                      >
+                        <td style={{ padding: "6px 8px", color: S.textMute }}>{d.i}</td>
+                        <td style={{ padding: "6px 8px", color: S.text }}>
+                          <TimeButton value={d.src0} onClick={() => seek("source", d.src0, true)} />
+                          <span style={{ color: S.textMute }}>–</span>
+                          <TimeButton value={d.src1} onClick={() => seek("source", d.src1, true)} />
+                        </td>
+                        <td style={{ padding: "6px 8px", color: d.action === "remove" ? S.textMute : S.text }}>
+                          {d.action === "remove" ? <TimeButton value={d.proc} muted onClick={() => seek("processed", d.proc, true)} /> : <TimeButton value={d.proc} onClick={() => seek("processed", d.proc, true)} />}
+                        </td>
+                        <td style={{ padding: "6px 8px", color: S.textDim }}>{d.dur}s</td>
+                        <td style={{ padding: "6px 8px" }}>
+                          <span style={{ color: col, ...sMono, fontSize: 9.5, border: `1px solid ${col}50`, padding: "1px 5px", textTransform: "uppercase", letterSpacing: 0.8 }}>{d.action}</span>
+                        </td>
+                        <td style={{ padding: "6px 8px", color: partial ? S.amber : S.textDim }}>{d.conf.toFixed(2)}</td>
+                        <td style={{ padding: "6px 8px", color: S.text, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.who}</td>
+                        <td style={{ padding: "6px 8px", color: S.textDim, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.reason}</td>
+                        <td style={{ padding: "6px 8px", color: S.textMute, fontSize: 9.5 }}>{d.method}</td>
+                        <td style={{ padding: "4px 8px", textAlign: "right" }}>
+                          <button
+                            type="button"
+                            aria-expanded={expanded}
+                            title={expanded ? "Hide decision details" : "Show decision details"}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleDecisionExpanded(d.i);
+                            }}
+                            style={{ ...sMono, fontSize: 9.5, color: expanded ? S.accent : S.textDim, background: expanded ? `${S.accent}12` : "transparent", border: `1px solid ${expanded ? S.accent : S.border}`, padding: "2px 6px", cursor: "pointer", textTransform: "uppercase" }}
+                          >
+                            {expanded ? "hide" : "view"}
+                          </button>
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr>
+                          <DecisionDetail d={d} onSeek={seek} />
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -313,16 +453,43 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
         </SPanel>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <SPanel title="Transcript" subtitle={`${ep.transcript.length} rows · click row to seek`} right={<><SBtn variant="ghost">Show all</SBtn><SBtn variant="ghost">Removed only</SBtn></>}>
+          <SPanel
+            title="Transcript"
+            subtitle={`${ep.transcript.length} rows · following ${activeTranscriptKind === "source" ? "source" : "output"} ${fmtTime(times[activeTranscriptKind])}`}
+            right={
+              <>
+                <SBtn variant={transcriptFollowPaused ? "soft" : "ghost"} onClick={toggleTranscriptFollow}>
+                  {transcriptFollowPaused ? "Resume follow" : "Pause follow"}
+                </SBtn>
+                <SBtn variant="ghost">Show all</SBtn>
+                <SBtn variant="ghost">Removed only</SBtn>
+              </>
+            }
+          >
             <div style={{ overflow: "auto", maxHeight: 360 }}>
               {ep.transcript.map((r, i) => {
                 const cmap: Record<string, string> = { kept: S.textDim, removed: S.red, partial: S.amber };
-                const bg = r.status === "partial" ? `${S.amber}10` : r.status === "removed" ? `${S.red}08` : "transparent";
+                const active = i === activeTranscriptIndex;
+                const bg = active ? `${S.accent}18` : r.status === "partial" ? `${S.amber}10` : r.status === "removed" ? `${S.red}08` : "transparent";
                 return (
                   <div
                     key={i}
-                    onClick={() => seek(r.proc === null ? "source" : "processed", r.proc ?? r.src, true)}
-                    style={{ display: "grid", gridTemplateColumns: "58px 58px 14px 1fr", gap: 8, padding: "7px 12px", borderBottom: `1px solid ${S.border}`, background: bg, cursor: "pointer" }}
+                    ref={(node) => {
+                      transcriptRowRefs.current[i] = node;
+                    }}
+                    aria-current={active ? "true" : undefined}
+                    onClick={() => seekTranscriptRow(r)}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "58px 58px 14px 1fr",
+                      gap: 8,
+                      padding: "7px 12px",
+                      borderBottom: `1px solid ${active ? S.accent : S.border}`,
+                      borderLeft: active ? `3px solid ${S.accent}` : "3px solid transparent",
+                      background: bg,
+                      cursor: "pointer",
+                      boxShadow: active ? `inset 0 0 0 1px ${S.accent}26` : "none",
+                    }}
                   >
                     <span style={{ ...sMono, fontSize: 10, color: S.textMute }}><TimeButton value={r.src} muted onClick={() => seek("source", r.src, true)} /></span>
                     <span style={{ ...sMono, fontSize: 10, color: r.proc === null ? S.textMute : S.accent }}>

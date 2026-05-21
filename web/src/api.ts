@@ -162,10 +162,30 @@ export interface EpisodeView {
   cuts: number;
   marks: number;
   cost: number;
-  decisions: Array<{ i: number; src0: number; src1: number; proc: number; dur: number; action: "remove" | "mark"; conf: number; who: string; reason: string; method: string }>;
+  decisions: Array<{
+    i: number;
+    src0: number;
+    src1: number;
+    proc: number;
+    dur: number;
+    action: "remove" | "mark";
+    conf: number;
+    who: string;
+    reason: string;
+    method: string;
+    source: string;
+    text?: string;
+    alignment?: {
+      startSegmentIndex?: number;
+      endSegmentIndex?: number;
+      method?: string;
+      startAnchorText?: string;
+      endAnchorText?: string;
+    };
+  }>;
   chaptersSource: Array<{ t: number; label: string }>;
   chaptersFinal: Array<{ t: number; label: string }>;
-  transcript: Array<{ src: number; proc: number | null; status: "kept" | "removed" | "partial"; text: string }>;
+  transcript: Array<{ src: number; srcEnd: number; proc: number | null; procEnd: number | null; status: "kept" | "removed" | "partial"; text: string }>;
   links: { manifest: string; transcriptJson: string; transcriptVtt: string; chaptersJson: string; sourceAudio: string; processedAudio: string };
 }
 

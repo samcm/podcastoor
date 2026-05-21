@@ -139,10 +139,30 @@ export interface EpisodeView {
   cuts: number;
   marks: number;
   cost: number;
-  decisions: Array<{ i: number; src0: number; src1: number; proc: number; dur: number; action: "remove" | "mark"; conf: number; who: string; reason: string; method: string }>;
+  decisions: Array<{
+    i: number;
+    src0: number;
+    src1: number;
+    proc: number;
+    dur: number;
+    action: "remove" | "mark";
+    conf: number;
+    who: string;
+    reason: string;
+    method: string;
+    source: string;
+    text?: string;
+    alignment?: {
+      startSegmentIndex?: number;
+      endSegmentIndex?: number;
+      method?: string;
+      startAnchorText?: string;
+      endAnchorText?: string;
+    };
+  }>;
   chaptersSource: Array<{ t: number; label: string }>;
   chaptersFinal: Array<{ t: number; label: string }>;
-  transcript: Array<{ src: number; proc: number | null; status: "kept" | "removed" | "partial"; text: string }>;
+  transcript: Array<{ src: number; srcEnd: number; proc: number | null; procEnd: number | null; status: "kept" | "removed" | "partial"; text: string }>;
   links: { manifest: string; transcriptJson: string; transcriptVtt: string; chaptersJson: string; sourceAudio: string; processedAudio: string };
 }
 
@@ -481,6 +501,9 @@ export async function buildEpisodeView(config: AppConfig, slug: string, episodeK
     who: d.advertiser ?? "—",
     reason: d.reason,
     method: METHOD_LABELS[d.alignment?.method ?? "manual"] ?? "model",
+    source: d.source,
+    text: d.text,
+    alignment: d.alignment,
   }));
 
   const transcript = await readJson<Transcript>(episodePaths(config, slug, episodeKey).transcriptJson);
@@ -490,7 +513,9 @@ export async function buildEpisodeView(config: AppConfig, slug: string, episodeK
     const status: "kept" | "removed" | "partial" = removedOverlap ? "removed" : markOverlap ? "partial" : "kept";
     return {
       src: Math.round(segment.start),
+      srcEnd: Math.round(segment.end),
       proc: status === "removed" ? null : Math.round(mapOriginalToProcessed(segment.start, removed, jingle)),
+      procEnd: status === "removed" ? null : Math.round(mapOriginalToProcessed(segment.end, removed, jingle)),
       status,
       text: segment.text,
     };
