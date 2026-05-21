@@ -24,7 +24,7 @@ function useClock(): string {
 }
 
 function useTopbarStats() {
-  const [stats, setStats] = useState<{ queue: number; retry: number; fail: number; costToday: number; costBudget: number } | undefined>();
+  const [stats, setStats] = useState<{ queue: number; retry: number; failed: number; quarantined: number; costToday: number; costBudget: number } | undefined>();
   useEffect(() => {
     let cancelled = false;
     api
@@ -35,7 +35,8 @@ function useTopbarStats() {
         setStats({
           queue: (q.queued ?? 0) + (q.running ?? 0),
           retry: q["waiting-for-credits"] ?? 0,
-          fail: (q.failed ?? 0) + (q.quarantined ?? 0),
+          failed: q.failed ?? 0,
+          quarantined: q.quarantined ?? 0,
           costToday: d.cost.today,
           costBudget: d.cost.todayBudget,
         });
@@ -83,7 +84,10 @@ function TopBar({ mobile }: { mobile: boolean }) {
               <SDot color={S.amber} /> retry {stats?.retry ?? "—"}
             </span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-              <SDot color={S.red} /> fail {stats?.fail ?? "—"}
+              <SDot color={S.red} /> fail {stats?.failed ?? "—"}
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <SDot color={S.amber} /> quar {stats?.quarantined ?? "—"}
             </span>
             <span style={{ color: S.textMute }}>·</span>
           </>
