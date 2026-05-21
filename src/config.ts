@@ -41,7 +41,7 @@ export const defaultConfig: AppConfig = {
     dryRun: false,
     downloadAudio: true,
     force: false,
-    confidenceThreshold: 0.72,
+    confidenceThreshold: 0.65,
     preserveUnknownSegments: true
   },
   automation: {
@@ -99,22 +99,25 @@ export const defaultConfig: AppConfig = {
   alignment: {
     enabled: true,
     provider: "auto",
-    model: "elevenlabs-forced-alignment",
-    estimatedCostPerMinuteUsd: 0.003667,
-    requireProvider: false
+    model: "whisperx",
+    estimatedCostPerMinuteUsd: 0,
+    requireProvider: true,
+    targetContextSeconds: 30,
+    targetMaxWindows: 12,
+    targetMaxClipSeconds: 360
   },
   llm: {
-    provider: "openrouter",
+    provider: "openai-compatible",
     enabled: true,
-    model: "qwen/qwen3.6-flash",
-    estimatedInputUsdPerMillion: 0.25,
-    estimatedOutputUsdPerMillion: 1.5,
+    model: "deepseek-v4-pro",
+    estimatedInputUsdPerMillion: 0,
+    estimatedOutputUsdPerMillion: 0,
     maxTranscriptChars: 180000
   },
   detection: {
     paddingSeconds: 0.6,
     prePaddingSeconds: 0,
-    postPaddingSeconds: 0.4,
+    postPaddingSeconds: 0,
     minSegmentSeconds: 8,
     maxSegmentSeconds: 240
   },

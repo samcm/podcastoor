@@ -170,7 +170,7 @@ export function rewriteFeed(
       const episode = parsed.episodes[index];
       if (!episode) return undefined;
       const manifest = options.manifests.get(episode.key);
-      if (!isPublishableManifest(episode, manifest, options.pipelineVersion)) return undefined;
+      if (!isPublishableManifest(episode, manifest)) return undefined;
       return rewriteEpisodeItem(getRecord(rawItem), episode.key, { ...options, identityKey }, manifest);
     })
     .filter((item): item is Record<string, unknown> => Boolean(item));
@@ -179,12 +179,11 @@ export function rewriteFeed(
   return `<?xml version="1.0" encoding="UTF-8"?>\n${builder.build(doc)}\n`;
 }
 
-function isPublishableManifest(episode: ParsedEpisode, manifest: EpisodeManifest | undefined, pipelineVersion?: string): manifest is EpisodeManifest {
+function isPublishableManifest(episode: ParsedEpisode, manifest: EpisodeManifest | undefined): manifest is EpisodeManifest {
   return Boolean(
     manifest &&
       manifest.audio.status === "completed" &&
-      manifest.sourceFingerprint === episode.sourceFingerprint &&
-      (!pipelineVersion || manifest.pipelineVersion === pipelineVersion)
+      manifest.sourceFingerprint === episode.sourceFingerprint
   );
 }
 
@@ -327,10 +326,7 @@ function deterministicUuid(seed: string): string {
 function appendProxyMetadata(item: Record<string, unknown>, manifest: EpisodeManifest): void {
   const block = buildProxyMetadataBlock(manifest);
   for (const key of ["description", "itunes:summary", "content:encoded"]) {
-    const current = textOf(item[key]);
-    if (!current) continue;
-    const withoutExisting = current.replace(/<hr>\s*<p><strong>Podcast Proxy<\/strong>[\s\S]*$/i, "").trim();
-    item[key] = { "#cdata": `${withoutExisting}${block}` };
+    item[key] = { "#cdata": block };
   }
 }
 
@@ -338,83 +334,82 @@ function buildProxyMetadataBlock(manifest: EpisodeManifest): string {
   const sourceDuration = manifest.audio.sourceDurationSeconds ?? manifest.originalDurationSeconds;
   const processedDuration = manifest.processedDurationSeconds ?? manifest.audio.durationSeconds;
   const savedSeconds = sourceDuration != null && processedDuration != null ? Math.max(0, sourceDuration - processedDuration) : undefined;
-  const topDecisions = manifest.decisions
-    .filter((decision) => decision.action === "remove")
-    .map((decision) => `<li>${escapeHtml(formatPscStart(decision.start))}-${escapeHtml(formatPscStart(decision.end))}: ${escapeHtml(formatDecisionLabel(decision))}</li>`)
-    .join("");
+  const renderedCuts = manifest.renderedCuts ?? manifest.decisions.filter((decision) => decision.action === "remove").map((decision) => ({ start: decision.start, end: decision.end }));
+  const removedAds = removedAdList(manifest, renderedCuts);
   const llmCost = (manifest.llm ?? []).reduce((sum, usage) => sum + (usage.costUsd ?? 0), 0);
-  const transcriptDetails = manifest.transcript
-    ? [
-        `source=${manifest.transcript.source}`,
-        `format=${manifest.transcript.format}`,
-        `segments=${manifest.transcript.segmentCount}`,
-        manifest.transcript.model ? `model=${manifest.transcript.model}` : undefined,
-        manifest.transcript.seconds != null ? `seconds=${manifest.transcript.seconds.toFixed(3)}` : undefined,
-        manifest.transcript.costUsd != null ? `cost=$${manifest.transcript.costUsd.toFixed(6)}` : undefined
-      ]
-        .filter(Boolean)
-        .join("; ")
-    : "none";
-  const llmDetails = (manifest.llm ?? [])
-    .map(
-      (usage, index) =>
-        [
-          `#${index + 1}`,
-          `provider=${usage.provider}`,
-          `purpose=${usage.purpose}`,
-          `model=${usage.model}`,
-          usage.generationId ? `generation=${usage.generationId}` : undefined,
-          usage.promptTokens != null ? `promptTokens=${usage.promptTokens}` : undefined,
-          usage.completionTokens != null ? `completionTokens=${usage.completionTokens}` : undefined,
-          usage.totalTokens != null ? `totalTokens=${usage.totalTokens}` : undefined,
-          usage.costUsd != null ? `cost=$${usage.costUsd.toFixed(6)}` : undefined
-        ]
-          .filter(Boolean)
-          .join("; ")
-    )
-    .join("; ");
+  const classifierModels = uniqueStrings((manifest.llm ?? []).map((usage) => compactModelName(usage.model)));
+  const transcriptLabel = manifest.transcript ? compactTranscriptLabel(manifest.transcript.source, manifest.transcript.model) : "none";
+  const alignmentLabel = manifest.alignment ? `${manifest.alignment.provider}/${compactModelName(manifest.alignment.model)}` : "none";
+  const chapters = manifest.chapters
+    .slice(0, 10)
+    .map((chapter) => `<li>${escapeHtml(formatPscStart(chapter.startTime))} ${escapeHtml(chapter.title)}</li>`)
+    .join("");
   return [
-    "<hr>",
     "<p><strong>Podcast Proxy</strong></p>",
     "<ul>",
-    `<li>Version: Ad Free</li>`,
-    `<li>Pipeline: ${escapeHtml(manifest.pipelineVersion)}</li>`,
-    `<li>Processing signature: ${escapeHtml(manifest.processingSignature)}</li>`,
-    `<li>Generated: ${escapeHtml(manifest.generatedAt)}</li>`,
-    `<li>Source URL: ${escapeHtml(manifest.sourceUrl ?? "unknown")}</li>`,
-    `<li>Source fingerprint: ${escapeHtml(manifest.sourceFingerprint)}</li>`,
     `<li>Time saved: ${escapeHtml(savedSeconds == null ? "unknown" : formatDuration(savedSeconds))}</li>`,
-    `<li>RSS duration: ${escapeHtml(formatMaybeDuration(manifest.originalDurationSeconds))}</li>`,
-    `<li>Source audio: ${escapeHtml(formatMaybeDuration(sourceDuration))}</li>`,
-    `<li>Processed audio: ${escapeHtml(formatMaybeDuration(processedDuration))}</li>`,
-    `<li>Audio status: ${escapeHtml(manifest.audio.status)}</li>`,
-    `<li>Render mode: ${escapeHtml(manifest.audio.renderMode ?? "unknown")}${manifest.audio.codec ? `; codec=${escapeHtml(manifest.audio.codec)}` : ""}${manifest.audio.bitrateKbps ? `; bitrate=${manifest.audio.bitrateKbps}kbps` : ""}</li>`,
-    `<li>Removed segments: ${manifest.decisions.filter((decision) => decision.action === "remove").length}</li>`,
-    `<li>Marker tones: ${manifest.audio.jingleInsertedCount}</li>`,
-    `<li>Estimated cost: $${manifest.costs.estimatedUsd.toFixed(6)}</li>`,
-    `<li>Actual cost: $${manifest.costs.actualUsd.toFixed(6)}</li>`,
-    `<li>Cost notes: ${escapeHtml(manifest.costs.notes.join(" | ") || "none")}</li>`,
-    `<li>Transcript: ${escapeHtml(transcriptDetails)}</li>`,
-    `<li>Alignment: ${escapeHtml(manifest.alignment ? `${manifest.alignment.provider}/${manifest.alignment.model}; confidence=${Math.round(manifest.alignment.confidence * 100)}%; adjusted=${manifest.alignment.adjustedSegments}; maxAdjustment=${manifest.alignment.maxAdjustmentSeconds}s` : "none")}</li>`,
-    `<li>Source chapters: ${manifest.sourceChapters?.length ?? 0}</li>`,
-    `<li>Final chapters: ${manifest.chapters.length}</li>`,
-    `<li>LLM calls: ${(manifest.llm ?? []).length}; ${escapeHtml(llmDetails || "none")}${llmCost > 0 ? `; LLM total $${llmCost.toFixed(6)}` : ""}</li>`,
-    `<li>Model notes: ${escapeHtml((manifest.modelNotes ?? []).join(" | ") || "none")}</li>`,
+    `<li>Duration: ${escapeHtml(formatMaybeDuration(sourceDuration))} -> ${escapeHtml(formatMaybeDuration(processedDuration))}</li>`,
+    `<li>Removed windows: ${renderedCuts.length}${manifest.audio.jingleInsertedCount ? `; marker tones: ${manifest.audio.jingleInsertedCount}` : ""}</li>`,
+    `<li>Audio: ${escapeHtml(manifest.audio.codec ?? "audio")}${manifest.audio.bitrateKbps ? `, ${manifest.audio.bitrateKbps}kbps` : ""}</li>`,
+    `<li>Models: transcript ${escapeHtml(transcriptLabel)}; alignment ${escapeHtml(alignmentLabel)}; detection ${escapeHtml(classifierModels.join(", ") || "none")}</li>`,
+    `<li>Cost: actual $${manifest.costs.actualUsd.toFixed(6)}; estimate $${manifest.costs.estimatedUsd.toFixed(6)}; LLM calls ${(manifest.llm ?? []).length}${llmCost > 0 ? `; LLM $${llmCost.toFixed(6)}` : ""}</li>`,
+    `<li>Generated: ${escapeHtml(manifest.generatedAt)}</li>`,
     "</ul>",
-    topDecisions ? `<p><strong>Removed windows</strong></p><ul>${topDecisions}</ul>` : ""
+    removedAds ? `<p><strong>Removed Ads</strong></p><ol>${removedAds}</ol>` : "",
+    chapters ? `<p><strong>Chapters</strong></p><ol>${chapters}</ol>` : ""
   ].join("");
 }
 
-function formatDecisionLabel(decision: { reason: string; advertiser?: string; confidence?: number; source?: string; alignment?: { method?: string } }): string {
-  return [
-    decision.advertiser ? `${decision.advertiser}` : "unknown advertiser",
-    decision.reason,
-    decision.confidence != null ? `${Math.round(decision.confidence * 100)}%` : undefined,
-    decision.source ? `source=${decision.source}` : undefined,
-    decision.alignment?.method ? `alignment=${decision.alignment.method}` : undefined
-  ]
-    .filter(Boolean)
-    .join("; ");
+function removedAdList(manifest: EpisodeManifest, renderedCuts: Array<{ start: number; end: number }>): string {
+  return renderedCuts
+    .map((cut) => {
+      const matching = manifest.decisions.filter((decision) => decision.action === "remove" && rangesOverlap(cut, decision));
+      const advertisers = uniqueStrings(matching.map((decision) => decision.advertiser ?? "").filter(Boolean)).slice(0, 3);
+      const reasons = uniqueStrings(matching.map((decision) => decision.reason).filter(Boolean).map(compactReason)).slice(0, 3);
+      const context = compactRemovedText(matching.map((decision) => decision.text ?? "").filter(Boolean).join(" "));
+      const who = advertisers.join("; ") || "Unknown advertiser";
+      const what = reasons.join("; ") || "removed audio";
+      const duration = formatDuration(Math.max(0, cut.end - cut.start));
+      const contextText = context ? ` - ${context}` : "";
+      return `<li><strong>${escapeHtml(formatPscStart(cut.start))}-${escapeHtml(formatPscStart(cut.end))}</strong> (${escapeHtml(duration)}): ${escapeHtml(who)} - ${escapeHtml(what)}${escapeHtml(contextText)}</li>`;
+    })
+    .join("");
+}
+
+function rangesOverlap(first: { start: number; end: number }, second: { start: number; end: number }): boolean {
+  return first.end > second.start + 0.25 && second.end > first.start + 0.25;
+}
+
+function compactReason(reason: string): string {
+  return reason
+    .replace(/\s*;\s*(content guard|ending ad tail|reviewed).*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
+function compactRemovedText(text: string): string {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (!cleaned) {
+    return "";
+  }
+  const sentenceEnd = cleaned.slice(0, 180).search(/[.!?](\s|$)/);
+  const summary = sentenceEnd >= 40 ? cleaned.slice(0, sentenceEnd + 1) : cleaned.slice(0, 140);
+  return summary.length < cleaned.length ? `${summary.replace(/[,\s]+$/, "")}...` : summary;
+}
+
+function compactTranscriptLabel(source: string, model: string | undefined): string {
+  if (model) return compactModelName(model);
+  const match = /:([^+:]+\/[^+]+)/.exec(source);
+  return match ? compactModelName(match[1]) : compactModelName(source);
+}
+
+function compactModelName(model: string): string {
+  return model.split("/").filter(Boolean).at(-1) ?? model;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function formatMaybeDuration(seconds: number | undefined): string {

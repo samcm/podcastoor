@@ -24,7 +24,7 @@ Pocket Casts generated transcripts are not used by default. There is no public P
 
 - Dynamic ad removal depends on ASR/model detection after the inserted audio appears in the downloaded file. There is not yet an audio-fingerprint diff across multiple regional downloads.
 - No diarization-aware classification yet.
-- Hosted forced alignment is implemented through ElevenLabs when `ELEVENLABS_API_KEY` is configured. Without that key, `alignment.provider: auto` falls back to segment-boundary cleanup so processing continues.
+- Local WhisperX forced alignment is implemented as the default `alignment.provider: auto` path. If the local runtime is unavailable, processing fails instead of falling back to coarse segment-boundary cuts. Hosted targeted ElevenLabs alignment is available with `alignment.provider: elevenlabs-targeted`, but it requires `ELEVENLABS_API_KEY` and only runs on model-proposed ad windows.
 - Web UI can enqueue reprocess/reset/tuning actions, but does not yet save manual segment edits.
 - No purge/retention policy, by design for this spike.
 - Queue state is persisted, but there is still no multi-worker locking beyond the single intended worker deployment.
@@ -40,7 +40,7 @@ Pocket Casts generated transcripts are not used by default. There is no public P
    - re-render one episode.
 
 2. Add a transcript pipeline:
-   - Qwen3-ASR/Qwen3-ForcedAligner or another word-timestamp provider as an alternative to ElevenLabs,
+   - Qwen3-ASR/Qwen3-ForcedAligner or another word-timestamp provider as an alternative or complement to WhisperX/targeted ElevenLabs,
    - boundary snapping to word/silence timestamps,
    - transcript cache keyed by audio fingerprint,
    - WER comparison against feed or Pocket Casts reference transcripts when available.
@@ -52,8 +52,8 @@ Pocket Casts generated transcripts are not used by default. There is no public P
    - classify discontinuities with transcript snippets.
 
 4. Add model-assisted chapters:
-   - enable OpenRouter only after budget checks,
-   - use `qwen/qwen3.6-flash` for the current ad classification path,
+   - enable text LLM calls only after budget checks,
+   - use the configured OpenAI-compatible text endpoint for ad classification,
    - benchmark cheaper text models only if they preserve cut quality.
 
 5. Improve Pocket Casts compatibility:

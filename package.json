@@ -11,8 +11,8 @@
     "process": "tsx src/cli.ts process",
     "dry-run": "tsx src/cli.ts process --dry-run",
     "benchmark": "tsx src/cli.ts benchmark",
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/tsc-run.mjs",
+    "typecheck": "node scripts/tsc-run.mjs --noEmit",
     "test": "vitest run",
     "normalize": "tsx src/cli.ts normalize"
   },
@@ -31,6 +31,6 @@
     "@types/node": "^22.13.10",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
-    "vitest": "^3.0.8"
+    "vitest": "^3.2.4"
   }
 }

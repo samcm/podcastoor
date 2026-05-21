@@ -1,6 +1,6 @@
 # Timestamp Precision Plan
 
-Checked on 2026-05-10. Updated after implementing hosted forced alignment.
+Checked on 2026-05-14. Updated after a bounded production-episode boundary benchmark.
 
 ## Current Problem
 
@@ -9,7 +9,7 @@ The current pipeline can identify ad windows, but destructive cuts depend on tim
 That is why a symmetric cut pad is risky: padding before the model's ad start can remove real content when the start timestamp is already early. The V1.5 default now uses asymmetric padding:
 
 - `prePaddingSeconds: 0`
-- `postPaddingSeconds: 0.4`
+- `postPaddingSeconds: 0`
 - `paddingSeconds: 0.6` remains only as a fallback for older runtime overrides
 
 This intentionally accepts that a little ad tail may remain if the model is late, because clipping the next sentence of content is worse than leaving a short ad remnant.
@@ -23,14 +23,14 @@ Recommended practical tuning:
 1. Keep transcription chunks in the 90-180 second range with overlap, not 10 seconds. Very short chunks lose conversational context and produce noisy duplicated fragments.
 2. Keep text-classifier windows larger, around 3-5 minutes with overlap, so ads that cross a window boundary still have surrounding context.
 3. Do a cheap edge-refinement pass only around candidate cuts. This pass should see about 20-40 seconds before and after each candidate boundary and decide whether to snap inward or outward.
-4. Prefer under-cutting by default: snap to the first ad word for starts and the last ad word for ends, then apply zero or minimal padding.
+4. Prefer under-cutting by default: snap to the first ad word for starts and the last ad word for ends, then apply zero padding unless a podcast has been manually tuned.
 
 ## Implemented Alignment Path
 
-The pipeline now has a real hosted forced-alignment path:
+The pipeline now has a local forced-alignment path:
 
 1. Generate the best transcript text available.
-2. Send the downloaded source audio plus transcript text to ElevenLabs `/v1/forced-alignment` when `ELEVENLABS_API_KEY` is set.
+2. Send downloaded source audio plus transcript segments to local WhisperX.
 3. Let the ad model classify over aligned words/utterances.
 4. Snap cuts to provider word boundaries when available.
 5. Render from the snapped cut windows.
@@ -41,20 +41,24 @@ Default config uses:
 alignment:
   enabled: true
   provider: auto
-  model: elevenlabs-forced-alignment
-  estimatedCostPerMinuteUsd: 0.003667
-  requireProvider: false
+  model: whisperx
+  estimatedCostPerMinuteUsd: 0
+  requireProvider: true
+  targetContextSeconds: 30
+  targetMaxWindows: 12
+  targetMaxClipSeconds: 360
 ```
 
-`auto` means: use ElevenLabs forced alignment when `ELEVENLABS_API_KEY` exists; otherwise fall back to segment-boundary cleanup. Set `requireProvider: true` to fail episodes instead of falling back.
+`auto` means: use local WhisperX and fail the episode if forced alignment is unavailable. There is no segment-boundary fallback in normal processing, because segment-only boundaries are not precise enough for destructive cuts.
 
-ElevenLabs forced alignment accepts audio plus transcript text and returns word/character timings. Source: https://elevenlabs.io/docs/api-reference/forced-alignment/create
+WhisperX uses phoneme-level forced alignment to produce word-level timestamps. Source: https://arxiv.org/abs/2303.00747
 
-ElevenLabs API pricing lists Scribe speech-to-text at `$0.22/hour`, which is `$0.003667/min`; the forced-alignment response does not include request cost, so the app records this as an estimated alignment cost. Source: https://elevenlabs.io/pricing/api?price.section=speech_to_text
+WhisperX runs locally and records no hosted API cost. It does consume CPU/GPU time and model cache storage. ElevenLabs forced alignment remains available only when explicitly configured with `provider: elevenlabs-forced`; it accepts audio plus transcript text and returns word/character timings. `provider: elevenlabs-targeted` uses the same hosted alignment endpoint only after ad detection, extracting candidate windows plus context and aligning those clips instead of the full episode. Source: https://elevenlabs.io/docs/api-reference/forced-alignment/create
+
+ElevenLabs API pricing lists Scribe speech-to-text at `$0.22/hour`, which is `$0.003667/min`; forced alignment is documented at the same rate. If a hosted alignment path is configured, set `alignment.estimatedCostPerMinuteUsd` so the app records an estimated alignment cost. With targeted alignment, a one-hour episode with 10 minutes of suspicious windows costs roughly `$0.037` for the alignment stage rather than `$0.22` for full-episode alignment. Source: https://elevenlabs.io/pricing/api?price.section=speech_to_text
 
 Other candidates remain useful future options:
 
-- WhisperX: uses voice activity detection plus forced phoneme alignment for long-form transcription with word-level timestamps. Source: https://arxiv.org/abs/2303.00747
 - AssemblyAI word-level timestamps: pre-recorded STT responses include per-word start/end/confidence data. Source: https://www.assemblyai.com/docs/pre-recorded-audio/export-transcripts-as-srt-vtt-or-text#word-level-timestamps
 - Deepgram or similar hosted STT providers: useful when the provider exposes word timestamps, confidence, utterances, and silence/endpointing metadata.
 
@@ -70,14 +74,28 @@ data/config/runtime-overrides.json
 
 Forced reprocesses will pick up the new cut policy and alignment config, write a new processing signature, and store alignment metadata in each manifest: provider, model, confidence, word count, estimated cost, adjusted segments, and max adjustment.
 
-## Next Implementation Step
+## Boundary Precision Update
 
-Add a dedicated `edge-refinement` stage before render:
+The bounded production benchmark showed the real precision failure:
 
-1. For each model-confirmed ad window, extract transcript rows near the start and end.
-2. Ask the text model to choose exact boundary segment IDs or word IDs, with a strict preference to avoid cutting editorial content.
-3. If word-level alignment is available, snap to word timestamps.
-4. If only segment timestamps exist, snap to segment boundaries and keep `prePaddingSeconds` at zero.
-5. Store the raw model window, refined window, final rendered window, and reason in the manifest.
+1. Segment-level STT left 2-8 second utterance chunks.
+2. The ad model could find the right ad block but sometimes put the boundary at the whole mixed segment.
+3. Audio-only OpenRouter models were cheap, but not accurate enough to trust for destructive cuts by themselves.
+4. The reliable path is semantic detection plus word-level alignment and anchored boundary repair.
 
-This limits extra LLM cost because it only runs on candidate ad boundaries, not the full episode.
+The pipeline now asks the classifier for mandatory `startAnchorText` and `endAnchorText` whenever a cut starts or ends inside a mixed transcript segment. After WhisperX or another word-level aligner runs, those anchor phrases are matched back to aligned words and the final decision is snapped to the first/last ad word rather than the coarse segment edge.
+
+Before rendering, a content-loss guard checks every removal window. If a boundary is inside a transcript segment and the requested anchor does not match forced-aligned words at that boundary, the guard moves the boundary inward to the nearest transcript edge. If that would leave no safe cut, the decision becomes mark-only. This may leave ad audio behind, but it prevents deleting editorial speech.
+
+The renderer also expands cuts over adjacent non-speech transition segments such as `[Music]`, `[Jingle]`, or `[Silence]`. That fixes dynamically inserted ad breaks where the model correctly finds the spoken ad copy but leaves a 5 second music bed before or after it.
+
+The target production shape is now:
+
+1. Detect broad ad candidates from transcript windows.
+2. Include phrase anchors for mixed boundary segments.
+3. Force-align transcript words to the actual downloaded audio.
+4. Snap ad cuts to anchor word timestamps when available.
+5. Expand only across adjacent structural non-speech transition audio.
+6. Render with zero pre-padding and zero default post-padding.
+
+If forced alignment is unavailable, the episode fails and stays out of RSS until the runtime is fixed and the job is retried.

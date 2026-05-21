@@ -34,6 +34,8 @@ export function normalizeChapters(chapters: Chapter[], maxItems = 10): Chapter[]
     if (!title || shouldDropChapter(title)) continue;
     const key = `${Math.round(chapter.startTime)}:${title.toLowerCase()}`;
     if (seen.has(key)) continue;
+    const previous = cleaned.at(-1);
+    if (previous && similarChapterTitles(previous.title, title)) continue;
     seen.add(key);
     cleaned.push({ ...chapter, title });
     if (cleaned.length >= maxItems) break;
@@ -127,8 +129,8 @@ function cleanChapterTitle(value: string): string {
 
   const words = withoutTags
     .split(/\s+/)
-    .filter((word) => !["and", "with", "the", "a", "an", "on", "of", "to", "for", "in", "discussion"].includes(word.toLowerCase()))
-    .slice(0, 4);
+    .filter((word) => !["discussion", "segment", "chapter"].includes(word.toLowerCase()))
+    .slice(0, 6);
 
   return words.map(titleCaseWord).join(" ");
 }
@@ -142,4 +144,20 @@ function titleCaseWord(word: string): string {
   const upper = word.toUpperCase();
   if (allCaps.has(upper)) return upper;
   return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+function similarChapterTitles(first: string, second: string): boolean {
+  const firstTokens = chapterTitleTokens(first);
+  const secondTokens = chapterTitleTokens(second);
+  if (firstTokens.length === 0 || secondTokens.length === 0) return true;
+  const overlap = firstTokens.filter((token) => secondTokens.includes(token)).length;
+  const smaller = Math.min(firstTokens.length, secondTokens.length);
+  return overlap >= Math.max(2, smaller);
+}
+
+function chapterTitleTokens(title: string): string[] {
+  return title
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token && !["and", "with", "the", "for", "from", "into", "about"].includes(token));
 }

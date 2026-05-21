@@ -23,7 +23,7 @@ test("publisher chapters are preserved, normalized, and remapped after cuts", ()
   const source = buildChapters(episode, undefined, { preferred: ["NRL"], muted: ["AFL"] });
   const remapped = normalizeChapters(remapChapters(source, [{ start: 60, end: 90 }], 0.35));
 
-  expect(source.map((chapter) => chapter.title)).toEqual(["Intro", "NRL Finals Preview", "AFL Controversy Segment"]);
+  expect(source.map((chapter) => chapter.title)).toEqual(["Intro", "NRL Finals Preview", "AFL Controversy"]);
   expect(remapped[1].startTime).toBeCloseTo(90.35);
   expect(remapped.length).toBeLessThanOrEqual(10);
 });

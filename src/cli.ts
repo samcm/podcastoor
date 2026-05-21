@@ -71,19 +71,23 @@ program
   .command("process")
   .description("Process recent episodes from configured feeds.")
   .option("--podcast <slug>", "only process one podcast")
+  .option("--episode-key <key>", "only process one episode key")
   .option("--max-episodes <count>", "max episodes per podcast", (value) => Number(value))
   .option("--dry-run", "write manifests without downloading/rendering audio")
   .option("--no-dry-run", "render audio if download is also enabled")
   .option("--download-audio", "download and render audio")
   .option("--force", "reprocess even when manifest matches")
+  .option("--full-reprocess", "reacquire transcript and rebuild artifacts instead of reusing cached transcript")
   .action(async (opts) => {
     const summary = await processFeeds({
       configPath: program.opts().config,
       podcastSlug: opts.podcast,
+      episodeKey: opts.episodeKey,
       maxEpisodes: opts.maxEpisodes,
       dryRun: opts.dryRun,
       downloadAudio: opts.downloadAudio,
-      force: opts.force
+      force: opts.force,
+      fullReprocess: opts.fullReprocess
     });
     console.log(JSON.stringify(summary, null, 2));
   });
