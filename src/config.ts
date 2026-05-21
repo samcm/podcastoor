@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AppConfig, EffectivePodcastConfig } from "./types.js";
 import { deepMerge, resolveFrom, unique } from "./utils.js";
 import { applyRuntimeOverrides } from "./runtime-overrides.js";
+import { readAddedPodcasts } from "./podcasts-store.js";
 
 const configSchema = z
   .object({
@@ -58,6 +59,7 @@ export const defaultConfig: AppConfig = {
   },
   costs: {
     monthlyBudgetUsd: 50,
+    dailyBudgetUsd: 25,
     perRunBudgetUsd: 1,
     transcribeMaxMinutesPerRun: 180,
     llmMaxInputTokensPerRun: 250000,
@@ -140,6 +142,8 @@ export async function loadConfig(configPath = defaultConfigPath()): Promise<AppC
   const parsed = normalizeRawConfig(YAML.parse(await readFile(absoluteConfigPath, "utf8")) as Record<string, unknown>);
   const merged = applyEnvOverrides(deepMerge(defaultConfig, parsed));
   merged.storage.dataDir = resolveFrom(configDir, merged.storage.dataDir);
+  const added = await readAddedPodcasts(merged.storage.dataDir);
+  merged.podcasts = { ...merged.podcasts, ...added } as AppConfig["podcasts"];
   return applyRuntimeOverrides(configSchema.parse(merged) as unknown as AppConfig);
 }
 

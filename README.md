@@ -7,9 +7,12 @@ The default mode is autonomous: on server startup it fetches the configured feed
 ## Current Shape
 
 - RSS proxy endpoint per podcast: `/feeds/:podcastSlug.xml`
-- Basic web UI:
-  - `/` podcast list
-  - `/podcasts/:podcastSlug` metadata and episode deep-dive
+- Operator console web UI (React SPA, served from `/`):
+  - `/` dashboard — KPIs, podcast grid, live activity, cost, quick actions
+  - `/podcasts/:slug` — podcast detail with episode table, effective config, manual actions
+  - `/podcasts/:slug/episodes/:key` — episode deep dive (source/processed timelines, decisions, transcript, chapters)
+  - `/queue` — queue & runs, `/costs` — cost dashboard, `/tuning` — runtime tuning
+  - backed by JSON view-model endpoints (`/api/dashboard`, `/api/queue-view`, `/api/cost-view`, `/api/tuning`, `/api/podcasts/:slug/episodes/:key`)
 - Served artifacts:
   - `/audio/:podcastSlug/:episodeKey/episode.mp3`
   - `/assets/:podcastSlug/:episodeKey/chapters.json`
@@ -30,7 +33,8 @@ The default mode is autonomous: on server startup it fetches the configured feed
 ## Setup
 
 ```bash
-npm install
+npm install            # backend deps
+npm install --prefix web  # frontend deps
 npm run bootstrap
 ```
 
@@ -73,7 +77,28 @@ Start the local server:
 npm run dev
 ```
 
-The server processes on startup and every `automation.intervalMinutes`.
+The server processes on startup and every `automation.intervalMinutes`. In production the API server also serves the built web UI from `web/dist`, so build it first with `npm run build` (compiles the server and bundles the frontend).
+
+## Web UI development
+
+The frontend is a Vite + React + TypeScript SPA under `web/`. For live development run the API server and the Vite dev server (which proxies `/api`, `/audio`, `/assets`, `/feeds` to the backend) side by side:
+
+```bash
+npm run dev        # API server on :3729
+npm run web:dev    # Vite dev server on :5173 (open this)
+```
+
+To explore the UI with realistic data without configuring real feeds, seed a demo dataset:
+
+```bash
+npm run seed                       # writes config.seed.yaml + ./data-seed
+npm run dev -- --config config.seed.yaml
+npm run web:dev                    # then open http://localhost:5173
+```
+
+The seed writes eight plausible-but-fictional shows, episode manifests, a queue, a cost ledger, and activity. Mutating actions in the UI (reprocess, reset, save tuning) require the admin token — the seeded config uses `demo-admin-token`.
+
+For a production-style run (no Vite), `npm run build` then `npm run server` serves the SPA and API together on one port.
 
 Operational controls are configured separately:
 

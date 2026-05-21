@@ -7,6 +7,7 @@ import { startServer } from "./server.js";
 import { benchmarkTranscripts, runSampleBenchmark } from "./benchmark.js";
 import { parsePodcastIndexJson, parseVtt } from "./transcripts.js";
 import { normalizeStoredManifestsFromConfig } from "./maintenance.js";
+import { seedDemoData, writeSeedConfigFile } from "./seed.js";
 
 const program = new Command();
 
@@ -112,6 +113,19 @@ program
   .description("Normalize stored manifests after pipeline rule changes.")
   .action(async () => {
     console.log(JSON.stringify(await normalizeStoredManifestsFromConfig(program.opts().config), null, 2));
+  });
+
+program
+  .command("seed")
+  .description("Write a plausible-but-fictional demo dataset and a config file for local frontend development.")
+  .option("--config-out <path>", "where to write the demo config", "config.seed.yaml")
+  .option("--data-dir <path>", "where to write the demo data", "./data-seed")
+  .action(async (opts) => {
+    await writeSeedConfigFile(opts.configOut, opts.dataDir);
+    const config = await loadConfig(opts.configOut);
+    const result = await seedDemoData(config);
+    console.log(JSON.stringify({ ...result, configPath: opts.configOut }, null, 2));
+    console.log(`\nSeeded. Start the demo server with:\n  npm run dev -- --config ${opts.configOut}\n`);
   });
 
 async function readTranscriptFile(filePath: string) {

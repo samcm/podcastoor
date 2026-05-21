@@ -69,9 +69,13 @@ export async function getPodcastDeepDive(config: AppConfig, slug: string) {
   const podcast = config.podcasts[slug];
   if (!podcast) return undefined;
   const effectivePodcast = resolvePodcastConfig(config, slug);
+  const seeded = podcast as unknown as Record<string, unknown>;
+  const seededDescription = typeof seeded.description === "string" ? seeded.description : undefined;
   const [manifests, feedMetadata, localArtworkUrl] = await Promise.all([
     listManifests(config, slug),
-    readPodcastFeedMetadata(effectivePodcast.feedUrl),
+    seededDescription
+      ? Promise.resolve({ title: podcast.name, description: seededDescription, episodeCount: undefined })
+      : readPodcastFeedMetadata(effectivePodcast.feedUrl),
     readLocalArtworkUrl(config, slug)
   ]);
   const processedCount = manifests.filter((manifest) => manifest.audio.status === "completed").length;
@@ -88,13 +92,16 @@ export async function getPodcastDeepDive(config: AppConfig, slug: string) {
     subscriptionUrl: `${config.server.publicBaseUrl}/feeds/${slug}.xml`,
     alternateSubscriptionUrl: `${config.server.publicBaseUrl}/feeds/${slug}/ad-free.xml`,
     lookbackDays: podcast.lookbackDays ?? config.processing.lookbackDays,
+    host: typeof seeded.host === "string" ? seeded.host : undefined,
+    accentColor: typeof seeded.accentColor === "string" ? seeded.accentColor : undefined,
+    demo: (seeded.demo as Record<string, unknown> | undefined) ?? undefined,
     metadata: {
       feedTitle: feedMetadata.title,
       description: feedMetadata.description,
-      sourceImageUrl: feedMetadata.imageUrl,
+      sourceImageUrl: "imageUrl" in feedMetadata ? feedMetadata.imageUrl : undefined,
       localArtworkUrl,
       upstreamEpisodeCount: feedMetadata.episodeCount,
-      feedError: feedMetadata.error,
+      feedError: "error" in feedMetadata ? feedMetadata.error : undefined,
       manifestCount: manifests.length,
       processedCount,
       dryRunCount,
@@ -164,7 +171,7 @@ function assetVersion(manifest: EpisodeManifest): string {
   return encodeURIComponent(`${manifest.pipelineVersion}-${manifest.generatedAt}`);
 }
 
-async function listManifests(config: AppConfig, slug: string): Promise<EpisodeManifest[]> {
+export async function listManifests(config: AppConfig, slug: string): Promise<EpisodeManifest[]> {
   const base = path.join(config.storage.dataDir, "podcasts", slug, "episodes");
   if (!(await pathExists(base))) return [];
   const entries = await readdir(base, { withFileTypes: true });

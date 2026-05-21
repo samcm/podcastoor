@@ -1,6 +1,8 @@
 node_modules/
 dist/
 data/
+data-seed/
+config.seed.yaml
 tmp/
 .env
 .DS_Store

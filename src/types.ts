@@ -36,6 +36,7 @@ export interface AutomationConfig {
 
 export interface CostConfig {
   monthlyBudgetUsd: number;
+  dailyBudgetUsd?: number;
   perRunBudgetUsd: number;
   transcribeMaxMinutesPerRun: number;
   llmMaxInputTokensPerRun: number;

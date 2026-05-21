@@ -1,6 +1,10 @@
 node_modules
+**/node_modules
 dist
+**/dist
 data
+data-seed
+config.seed.yaml
 tmp
 .git
 .DS_Store

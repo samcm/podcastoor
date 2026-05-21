@@ -24,6 +24,7 @@ admin:
   token: ""
 costs:
   monthlyBudgetUsd: 50
+  dailyBudgetUsd: 25
   perRunBudgetUsd: 1
   transcribeMaxMinutesPerRun: 180
   llmMaxInputTokensPerRun: 250000
