@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { S, sMono } from "../tokens";
 
 export function SDot({ color, size = 8, glow = false }: { color: string; size?: number; glow?: boolean }) {
@@ -147,22 +147,22 @@ export function SStatus({ s }: { s: string }) {
 }
 
 export function SArt({ title, slug, color, src, size = 56 }: { title: string; slug: string; color: string; src?: string; size?: number }) {
+  const [imageFailed, setImageFailed] = useState(false);
   const initials = title.split(" ").slice(0, 2).map((w) => w[0]).join("");
+  const showFallback = !src || imageFailed;
   return (
     <div style={{ width: size, height: size, background: color, position: "relative", overflow: "hidden", flex: "0 0 auto", display: "flex", alignItems: "flex-end", padding: 6 }}>
       <div style={{ position: "absolute", inset: 0, background: `linear-gradient(135deg, ${color}, ${color}cc 40%, #00000060)` }} />
-      {src && (
+      {src && !imageFailed && (
         <img
           src={src}
           alt={`${title} artwork`}
-          onError={(event) => {
-            event.currentTarget.style.display = "none";
-          }}
+          onError={() => setImageFailed(true)}
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
         />
       )}
-      <div style={{ position: "absolute", top: 6, right: 6, ...sMono, fontSize: 9, color: "#ffffffb0" }}>{slug.slice(0, 3).toUpperCase()}</div>
-      <div style={{ position: "relative", fontWeight: 700, fontSize: size * 0.32, color: "#fff", letterSpacing: -0.5, lineHeight: 1 }}>{initials}</div>
+      {showFallback && <div style={{ position: "absolute", top: 6, right: 6, ...sMono, fontSize: 9, color: "#ffffffb0" }}>{slug.slice(0, 3).toUpperCase()}</div>}
+      {showFallback && <div style={{ position: "relative", fontWeight: 700, fontSize: size * 0.32, color: "#fff", letterSpacing: -0.5, lineHeight: 1 }}>{initials}</div>}
     </div>
   );
 }
