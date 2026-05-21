@@ -184,8 +184,8 @@ function clockTime(iso?: string): string {
 
 function deriveStatus(failed: number, quarantined: number, running: boolean): PodcastStatus {
   if (running) return "run";
-  if (failed >= 3 || quarantined >= 2) return "fail";
-  if (failed > 0 || quarantined > 0) return "warn";
+  if (failed > 0) return "fail";
+  if (quarantined > 0) return "warn";
   return "ok";
 }
 

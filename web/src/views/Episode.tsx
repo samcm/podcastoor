@@ -49,13 +49,25 @@ function Timeline({ ep, kind, currentTime, onSeek }: { ep: EpisodeView; kind: Ki
   const dur = (kind === "source" ? ep.durSource : ep.durProc) || 1;
   const chapters = kind === "source" ? ep.chaptersSource : ep.chaptersFinal;
   const pct = (t: number) => (t / dur) * 100;
+  const seekFromClientX = (clientX: number, target: HTMLDivElement) => {
+    const rect = target.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    onSeek(kind, ratio * dur);
+  };
   return (
     <div
       onClick={(event) => {
-        const rect = event.currentTarget.getBoundingClientRect();
-        const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-        onSeek(kind, ratio * dur);
+        seekFromClientX(event.clientX, event.currentTarget);
       }}
+      onKeyDown={(event) => {
+        if (event.key === "Home") onSeek(kind, 0);
+        if (event.key === "End") onSeek(kind, dur);
+        if (event.key === "ArrowLeft") onSeek(kind, Math.max(0, currentTime - 10));
+        if (event.key === "ArrowRight") onSeek(kind, Math.min(dur, currentTime + 10));
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`${kind} audio timeline`}
       style={{ position: "relative", height: 108, padding: "18px 0 14px", background: S.panelHi, border: `1px solid ${S.border}`, cursor: "crosshair" }}
     >
       <Waveform kind={kind} />
@@ -189,7 +201,10 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
         ref={audioRefs.source}
         src={ep.links.sourceAudio}
         preload="metadata"
-        onTimeUpdate={(event) => setTimes((current) => ({ ...current, source: event.currentTarget.currentTime }))}
+        onTimeUpdate={(event) => {
+          const time = event.currentTarget.currentTime;
+          setTimes((current) => ({ ...current, source: time }));
+        }}
         onPause={() => setPlaying((current) => (current === "source" ? null : current))}
         onEnded={() => setPlaying((current) => (current === "source" ? null : current))}
       />
@@ -197,7 +212,10 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
         ref={audioRefs.processed}
         src={ep.links.processedAudio}
         preload="metadata"
-        onTimeUpdate={(event) => setTimes((current) => ({ ...current, processed: event.currentTarget.currentTime }))}
+        onTimeUpdate={(event) => {
+          const time = event.currentTarget.currentTime;
+          setTimes((current) => ({ ...current, processed: time }));
+        }}
         onPause={() => setPlaying((current) => (current === "processed" ? null : current))}
         onEnded={() => setPlaying((current) => (current === "processed" ? null : current))}
       />
