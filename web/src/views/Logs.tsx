@@ -27,9 +27,14 @@ export function Logs() {
                 <tr key={i} style={{ borderBottom: `1px solid ${S.border}` }}>
                   <td style={{ padding: "6px 12px", color: S.textMute, width: 70 }}>{a.time}</td>
                   <td style={{ padding: "6px 8px", color: OUTCOME_COLOR[a.outcome], width: 8 }}>●</td>
-                  <td style={{ padding: "6px 8px", color: S.textDim, width: 150 }}>
-                    {a.podcastSlug}
-                    {a.episodeNumber && <span style={{ color: S.textMute }}> #{a.episodeNumber}</span>}
+                  <td style={{ padding: "6px 8px", color: S.textDim, width: 260, maxWidth: 360 }}>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {a.podcastSlug}
+                      {a.episodeNumber && <span style={{ color: S.textMute }}> #{a.episodeNumber}</span>}
+                    </div>
+                    {a.episodeTitle && (
+                      <div style={{ marginTop: 1, color: S.textMute, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.episodeTitle}</div>
+                    )}
                   </td>
                   <td style={{ padding: "6px 8px", color: S.accent, width: 90 }}>{a.stage}</td>
                   <td style={{ padding: "6px 12px 6px 8px", color: S.text }}>{a.message}</td>

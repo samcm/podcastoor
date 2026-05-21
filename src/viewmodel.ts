@@ -59,6 +59,7 @@ export interface ActivityRow {
   time: string;
   podcastSlug: string;
   episodeNumber: string;
+  episodeTitle: string;
   stage: string;
   message: string;
   outcome: "ok" | "info" | "warn" | "fail";
@@ -125,6 +126,8 @@ export interface TuningView {
 export interface EpisodeView {
   podcast: string;
   podcastSlug: string;
+  podcastColor: string;
+  podcastArtworkUrl?: string;
   episodeKey: string;
   number: number;
   title: string;
@@ -274,6 +277,7 @@ export async function buildDashboard(config: AppConfig): Promise<DashboardView> 
       time: clockTime(event.at),
       podcastSlug: event.podcastSlug ?? "—",
       episodeNumber: String(details.episodeNumber ?? ""),
+      episodeTitle: event.episodeTitle ?? String(details.episodeTitle ?? ""),
       stage: String(details.stage ?? "—"),
       message: event.message,
       outcome,
@@ -497,6 +501,8 @@ export async function buildEpisodeView(config: AppConfig, slug: string, episodeK
   return {
     podcast: manifest.podcastName,
     podcastSlug: slug,
+    podcastColor: colorFor(config, slug),
+    podcastArtworkUrl: await readLocalArtworkUrl(config, slug),
     episodeKey,
     number: numberMatch ? Number(numberMatch[1]) : 0,
     title: manifest.title,

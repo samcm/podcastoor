@@ -1,6 +1,7 @@
+import { useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { S, sMono, fmtTime, fmtDur } from "../tokens";
-import { SPanel, SBtn, SStatus, Loading, ErrorNote } from "../components/ui";
+import { SPanel, SBtn, SStatus, SArt, Loading, ErrorNote } from "../components/ui";
 import { api, type EpisodeView } from "../api";
 import { useApi, useIsMobile } from "../hooks";
 
@@ -18,13 +19,45 @@ function Waveform({ kind }: { kind: Kind }) {
   );
 }
 
-function Timeline({ ep, kind }: { ep: EpisodeView; kind: Kind }) {
+function TimeButton({ value, muted = false, onClick }: { value: number; muted?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      style={{
+        ...sMono,
+        border: "none",
+        background: "transparent",
+        padding: 0,
+        color: muted ? S.textMute : S.accent,
+        cursor: "pointer",
+        fontSize: "inherit",
+        textDecoration: "underline",
+        textDecorationColor: `${S.accent}55`,
+        textUnderlineOffset: 2,
+      }}
+    >
+      {fmtTime(value)}
+    </button>
+  );
+}
+
+function Timeline({ ep, kind, currentTime, onSeek }: { ep: EpisodeView; kind: Kind; currentTime: number; onSeek: (kind: Kind, seconds: number) => void }) {
   const dur = (kind === "source" ? ep.durSource : ep.durProc) || 1;
   const chapters = kind === "source" ? ep.chaptersSource : ep.chaptersFinal;
-  const playhead = 0.42;
   const pct = (t: number) => (t / dur) * 100;
   return (
-    <div style={{ position: "relative", height: 108, padding: "18px 0 14px", background: S.panelHi, border: `1px solid ${S.border}` }}>
+    <div
+      onClick={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+        onSeek(kind, ratio * dur);
+      }}
+      style={{ position: "relative", height: 108, padding: "18px 0 14px", background: S.panelHi, border: `1px solid ${S.border}`, cursor: "crosshair" }}
+    >
       <Waveform kind={kind} />
       {ep.decisions.map((d) => {
         if (kind === "processed" && d.action === "remove") return null;
@@ -64,7 +97,7 @@ function Timeline({ ep, kind }: { ep: EpisodeView; kind: Kind }) {
               <div style={{ position: "absolute", top: -4, left: -3, width: 7, height: 7, background: S.blue, border: `1px solid ${S.bg}` }} />
             </div>
           ))}
-      <div style={{ position: "absolute", left: `${playhead * 100}%`, top: 14, bottom: 10, width: 2, background: S.accent, boxShadow: `0 0 8px ${S.accent}` }}>
+      <div style={{ position: "absolute", left: `${pct(currentTime)}%`, top: 14, bottom: 10, width: 2, background: S.accent, boxShadow: `0 0 8px ${S.accent}` }}>
         <div style={{ position: "absolute", top: -6, left: -5, width: 12, height: 8, background: S.accent, clipPath: "polygon(0 0, 100% 0, 50% 100%)" }} />
       </div>
       <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 14, display: "flex", justifyContent: "space-between", padding: "0 6px", ...sMono, fontSize: 9.5, color: S.textMute }}>
@@ -76,15 +109,15 @@ function Timeline({ ep, kind }: { ep: EpisodeView; kind: Kind }) {
   );
 }
 
-function Transport({ ep, kind }: { ep: EpisodeView; kind: Kind }) {
+function Transport({ ep, kind, currentTime, playing, onToggle, onSeek }: { ep: EpisodeView; kind: Kind; currentTime: number; playing: boolean; onToggle: (kind: Kind) => void; onSeek: (kind: Kind, seconds: number) => void }) {
   const dur = kind === "source" ? ep.durSource : ep.durProc;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: S.panel, border: `1px solid ${S.border}`, borderBottom: "none", flexWrap: "wrap" }}>
       <div style={{ ...sMono, fontSize: 10, letterSpacing: 1, color: kind === "source" ? S.textDim : S.accent, textTransform: "uppercase" }}>{kind === "source" ? "SRC" : "OUT"}</div>
-      <button style={{ width: 26, height: 26, background: S.accent, color: "#1a1208", border: "none", cursor: "pointer", fontSize: 12 }}>▶</button>
-      <button style={{ width: 26, height: 26, background: "transparent", color: S.textDim, border: `1px solid ${S.border}`, cursor: "pointer" }}>↺</button>
+      <button onClick={() => onToggle(kind)} style={{ width: 26, height: 26, background: S.accent, color: "#1a1208", border: "none", cursor: "pointer", fontSize: 12 }}>{playing ? "⏸" : "▶"}</button>
+      <button onClick={() => onSeek(kind, 0)} style={{ width: 26, height: 26, background: "transparent", color: S.textDim, border: `1px solid ${S.border}`, cursor: "pointer" }}>↺</button>
       <div style={{ ...sMono, fontSize: 11, color: S.text }}>
-        {fmtTime(dur * 0.42)} <span style={{ color: S.textMute }}>/ {fmtTime(dur)}</span>
+        {fmtTime(currentTime)} <span style={{ color: S.textMute }}>/ {fmtTime(dur)}</span>
       </div>
       <div style={{ flex: 1 }} />
       <div style={{ ...sMono, fontSize: 10, color: S.textDim, display: "flex", gap: 10 }}>
@@ -108,6 +141,40 @@ function Legend() {
 }
 
 function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
+  const audioRefs = {
+    source: useRef<HTMLAudioElement>(null),
+    processed: useRef<HTMLAudioElement>(null),
+  };
+  const [playing, setPlaying] = useState<Kind | null>(null);
+  const [times, setTimes] = useState<Record<Kind, number>>({ source: 0, processed: 0 });
+
+  const audioFor = (kind: Kind) => audioRefs[kind].current;
+  const seek = (kind: Kind, seconds: number, play = false) => {
+    const audio = audioFor(kind);
+    if (!audio) return;
+    const duration = kind === "source" ? ep.durSource : ep.durProc;
+    const next = Math.max(0, Math.min(Number.isFinite(duration) ? duration : seconds, seconds));
+    audio.currentTime = next;
+    setTimes((current) => ({ ...current, [kind]: next }));
+    if (play) {
+      const other = kind === "source" ? audioRefs.processed.current : audioRefs.source.current;
+      other?.pause();
+      void audio.play().then(() => setPlaying(kind)).catch(() => setPlaying(null));
+    }
+  };
+  const toggle = (kind: Kind) => {
+    const audio = audioFor(kind);
+    if (!audio) return;
+    if (playing === kind && !audio.paused) {
+      audio.pause();
+      setPlaying(null);
+      return;
+    }
+    const other = kind === "source" ? audioRefs.processed.current : audioRefs.source.current;
+    other?.pause();
+    void audio.play().then(() => setPlaying(kind)).catch(() => setPlaying(null));
+  };
+
   const headStats: Array<[string, string, string]> = [
     ["SOURCE", fmtTime(ep.durSource), S.textDim],
     ["PROCESSED", fmtTime(ep.durProc), S.text],
@@ -118,6 +185,22 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
   ];
   return (
     <div style={{ padding: mobile ? 10 : 14, gap: 10, display: "flex", flexDirection: "column" }}>
+      <audio
+        ref={audioRefs.source}
+        src={ep.links.sourceAudio}
+        preload="metadata"
+        onTimeUpdate={(event) => setTimes((current) => ({ ...current, source: event.currentTarget.currentTime }))}
+        onPause={() => setPlaying((current) => (current === "source" ? null : current))}
+        onEnded={() => setPlaying((current) => (current === "source" ? null : current))}
+      />
+      <audio
+        ref={audioRefs.processed}
+        src={ep.links.processedAudio}
+        preload="metadata"
+        onTimeUpdate={(event) => setTimes((current) => ({ ...current, processed: event.currentTarget.currentTime }))}
+        onPause={() => setPlaying((current) => (current === "processed" ? null : current))}
+        onEnded={() => setPlaying((current) => (current === "processed" ? null : current))}
+      />
       <div style={{ display: "flex", alignItems: "center", gap: 10, ...sMono, fontSize: 11, color: S.textDim, flexWrap: "wrap" }}>
         <Link to="/" style={{ color: S.textMute }}>podcasts</Link>
         <span style={{ color: S.textMute }}>/</span>
@@ -135,10 +218,13 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
 
       <SPanel>
         <div style={{ padding: 14, display: "flex", gap: 16, alignItems: "flex-start", flexDirection: mobile ? "column" : "row" }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, letterSpacing: -0.2 }}>{ep.title}</h1>
-            <div style={{ ...sMono, fontSize: 11, color: S.textDim, marginTop: 3 }}>
-              {ep.podcast} · ep {ep.number} · published {ep.pubAt}
+          <div style={{ display: "flex", gap: 14, flex: 1, minWidth: 0, alignItems: "flex-start", flexDirection: mobile ? "column" : "row" }}>
+            <SArt title={ep.podcast} slug={ep.podcastSlug} color={ep.podcastColor} src={ep.podcastArtworkUrl} size={mobile ? 104 : 132} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, letterSpacing: -0.2 }}>{ep.title}</h1>
+              <div style={{ ...sMono, fontSize: 11, color: S.textDim, marginTop: 3 }}>
+                {ep.podcast} · ep {ep.number} · published {ep.pubAt}
+              </div>
             </div>
           </div>
           <div style={{ display: "flex", gap: mobile ? 16 : 24, ...sMono, fontSize: 11, flexWrap: "wrap" }}>
@@ -154,11 +240,11 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
 
       <SPanel title="Timelines" subtitle="source → processed" right={<Legend />}>
         <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 0 }}>
-          <Transport ep={ep} kind="source" />
-          <Timeline ep={ep} kind="source" />
+          <Transport ep={ep} kind="source" currentTime={times.source} playing={playing === "source"} onToggle={toggle} onSeek={seek} />
+          <Timeline ep={ep} kind="source" currentTime={times.source} onSeek={(kind, seconds) => seek(kind, seconds, true)} />
           <div style={{ height: 14 }} />
-          <Transport ep={ep} kind="processed" />
-          <Timeline ep={ep} kind="processed" />
+          <Transport ep={ep} kind="processed" currentTime={times.processed} playing={playing === "processed"} onToggle={toggle} onSeek={seek} />
+          <Timeline ep={ep} kind="processed" currentTime={times.processed} onSeek={(kind, seconds) => seek(kind, seconds, true)} />
         </div>
       </SPanel>
 
@@ -178,10 +264,20 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
                   const partial = d.conf < 0.7;
                   const col = d.action === "remove" ? S.red : S.amber;
                   return (
-                    <tr key={d.i} style={{ borderBottom: `1px solid ${S.border}`, background: d.action === "mark" ? `${S.amber}08` : "transparent" }}>
+                    <tr
+                      key={d.i}
+                      onClick={() => seek("source", d.src0, true)}
+                      style={{ borderBottom: `1px solid ${S.border}`, background: d.action === "mark" ? `${S.amber}08` : "transparent", cursor: "pointer" }}
+                    >
                       <td style={{ padding: "6px 8px", color: S.textMute }}>{d.i}</td>
-                      <td style={{ padding: "6px 8px", color: S.text }}>{fmtTime(d.src0)}<span style={{ color: S.textMute }}>–</span>{fmtTime(d.src1)}</td>
-                      <td style={{ padding: "6px 8px", color: d.action === "remove" ? S.textMute : S.text }}>{d.action === "remove" ? "—" : fmtTime(d.proc)}</td>
+                      <td style={{ padding: "6px 8px", color: S.text }}>
+                        <TimeButton value={d.src0} onClick={() => seek("source", d.src0, true)} />
+                        <span style={{ color: S.textMute }}>–</span>
+                        <TimeButton value={d.src1} onClick={() => seek("source", d.src1, true)} />
+                      </td>
+                      <td style={{ padding: "6px 8px", color: d.action === "remove" ? S.textMute : S.text }}>
+                        {d.action === "remove" ? "—" : <TimeButton value={d.proc} onClick={() => seek("processed", d.proc, true)} />}
+                      </td>
                       <td style={{ padding: "6px 8px", color: S.textDim }}>{d.dur}s</td>
                       <td style={{ padding: "6px 8px" }}>
                         <span style={{ color: col, ...sMono, fontSize: 9.5, border: `1px solid ${col}50`, padding: "1px 5px", textTransform: "uppercase", letterSpacing: 0.8 }}>{d.action}</span>
@@ -205,9 +301,15 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
                 const cmap: Record<string, string> = { kept: S.textDim, removed: S.red, partial: S.amber };
                 const bg = r.status === "partial" ? `${S.amber}10` : r.status === "removed" ? `${S.red}08` : "transparent";
                 return (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "58px 58px 14px 1fr", gap: 8, padding: "7px 12px", borderBottom: `1px solid ${S.border}`, background: bg, cursor: "pointer" }}>
-                    <span style={{ ...sMono, fontSize: 10, color: S.textMute }}>{fmtTime(r.src)}</span>
-                    <span style={{ ...sMono, fontSize: 10, color: r.proc === null ? S.textMute : S.accent }}>{r.proc === null ? "—" : fmtTime(r.proc)}</span>
+                  <div
+                    key={i}
+                    onClick={() => seek(r.proc === null ? "source" : "processed", r.proc ?? r.src, true)}
+                    style={{ display: "grid", gridTemplateColumns: "58px 58px 14px 1fr", gap: 8, padding: "7px 12px", borderBottom: `1px solid ${S.border}`, background: bg, cursor: "pointer" }}
+                  >
+                    <span style={{ ...sMono, fontSize: 10, color: S.textMute }}><TimeButton value={r.src} muted onClick={() => seek("source", r.src, true)} /></span>
+                    <span style={{ ...sMono, fontSize: 10, color: r.proc === null ? S.textMute : S.accent }}>
+                      {r.proc === null ? "—" : <TimeButton value={r.proc} onClick={() => seek("processed", r.proc!, true)} />}
+                    </span>
                     <span style={{ ...sMono, fontSize: 9, color: cmap[r.status], letterSpacing: 0.6, textTransform: "uppercase", alignSelf: "center" }}>{r.status === "kept" ? "·" : r.status === "partial" ? "½" : "✕"}</span>
                     <span style={{ fontSize: 11.5, color: r.status === "removed" ? S.textMute : S.text, textDecoration: r.status === "removed" ? "line-through" : "none", lineHeight: 1.5 }}>{r.text}</span>
                   </div>
@@ -224,8 +326,8 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
                 {ep.chaptersSource.slice(0, 8).map((c, i) => {
                   const isAd = /Sponsor/.test(c.label);
                   return (
-                    <div key={i} style={{ display: "flex", gap: 6, padding: "2px 0", color: isAd ? S.red : S.textDim }}>
-                      <span style={{ color: S.textMute, width: 42 }}>{fmtTime(c.t)}</span>
+                    <div key={i} onClick={() => seek("source", c.t, true)} style={{ display: "flex", gap: 6, padding: "2px 0", color: isAd ? S.red : S.textDim, cursor: "pointer" }}>
+                      <span style={{ color: S.textMute, width: 42 }}><TimeButton value={c.t} muted onClick={() => seek("source", c.t, true)} /></span>
                       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.label}</span>
                     </div>
                   );
@@ -235,8 +337,8 @@ function EpisodeBody({ ep, mobile }: { ep: EpisodeView; mobile: boolean }) {
               <div>
                 <div style={{ fontSize: 9, letterSpacing: 1, color: S.textMute, textTransform: "uppercase", marginBottom: 4 }}>Final · {ep.chaptersFinal.length}</div>
                 {ep.chaptersFinal.map((c, i) => (
-                  <div key={i} style={{ display: "flex", gap: 6, padding: "2px 0", color: S.text }}>
-                    <span style={{ color: S.green, width: 42 }}>{fmtTime(c.t)}</span>
+                  <div key={i} onClick={() => seek("processed", c.t, true)} style={{ display: "flex", gap: 6, padding: "2px 0", color: S.text, cursor: "pointer" }}>
+                    <span style={{ color: S.green, width: 42 }}><TimeButton value={c.t} onClick={() => seek("processed", c.t, true)} /></span>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.label}</span>
                   </div>
                 ))}

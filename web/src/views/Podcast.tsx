@@ -96,7 +96,7 @@ function PodcastBody({ data, mobile, reload }: { data: DeepDive; mobile: boolean
 
       <SPanel>
         <div style={{ padding: 16, display: "flex", gap: 16, flexDirection: mobile ? "column" : "row" }}>
-          <SArt title={data.name} slug={data.slug} color={accent} src={artworkUrl} size={mobile ? 88 : 120} />
+          <SArt title={data.name} slug={data.slug} color={accent} src={artworkUrl} size={mobile ? 112 : 168} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: -0.3 }}>{data.name}</h1>

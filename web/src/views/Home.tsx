@@ -10,7 +10,7 @@ const OUTCOME_COLOR: Record<string, string> = { ok: S.green, info: S.textDim, wa
 function PodcastTile({ p, mobile }: { p: PodcastCard; mobile: boolean }) {
   return (
     <Link to={`/podcasts/${p.slug}`} style={{ display: "flex", gap: 10, padding: 12 }}>
-      <SArt title={p.name} slug={p.slug} color={p.color} src={p.artworkUrl} size={56} />
+      <SArt title={p.name} slug={p.slug} color={p.color} src={p.artworkUrl} size={68} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontWeight: 600, fontSize: 13, color: S.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
@@ -97,9 +97,14 @@ function HomeBody({ data, mobile, reload }: { data: DashboardView; mobile: boole
                   <tr key={i} style={{ borderBottom: `1px solid ${S.border}` }}>
                     <td style={{ padding: "5px 12px", color: S.textMute, width: 64 }}>{a.time}</td>
                     <td style={{ padding: "5px 8px", color: OUTCOME_COLOR[a.outcome], width: 8 }}>●</td>
-                    <td style={{ padding: "5px 8px", color: S.textDim, width: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {a.podcastSlug}
-                      {a.episodeNumber && <span style={{ color: S.textMute }}> #{a.episodeNumber}</span>}
+                    <td style={{ padding: "5px 8px", color: S.textDim, width: 210, maxWidth: 260, overflow: "hidden" }}>
+                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {a.podcastSlug}
+                        {a.episodeNumber && <span style={{ color: S.textMute }}> #{a.episodeNumber}</span>}
+                      </div>
+                      {a.episodeTitle && (
+                        <div style={{ marginTop: 1, color: S.textMute, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.episodeTitle}</div>
+                      )}
                     </td>
                     <td style={{ padding: "5px 8px", color: S.accent, width: 72 }}>{a.stage}</td>
                     <td style={{ padding: "5px 12px 5px 8px", color: S.text }}>{a.message}</td>

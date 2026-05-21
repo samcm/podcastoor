@@ -27,6 +27,7 @@ export interface ActivityRow {
   time: string;
   podcastSlug: string;
   episodeNumber: string;
+  episodeTitle: string;
   stage: string;
   message: string;
   outcome: "ok" | "info" | "warn" | "fail";
@@ -148,6 +149,8 @@ export interface DeepDive {
 export interface EpisodeView {
   podcast: string;
   podcastSlug: string;
+  podcastColor: string;
+  podcastArtworkUrl?: string;
   episodeKey: string;
   number: number;
   title: string;
