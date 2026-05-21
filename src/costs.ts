@@ -57,7 +57,7 @@ export function estimateEpisodeCost(podcast: EffectivePodcastConfig, transcript:
     const inputCost = (inputTokens / 1_000_000) * podcast.llm.estimatedInputUsdPerMillion;
     const outputCost = (outputTokens / 1_000_000) * podcast.llm.estimatedOutputUsdPerMillion;
     estimatedUsd += inputCost + outputCost;
-    notes.push(`OpenRouter estimate: ${inputTokens} input tokens + ${outputTokens} output tokens across ${windows} windows on ${podcast.llm.model}`);
+    notes.push(`${llmProviderLabel(podcast.llm.provider)} estimate: ${inputTokens} input tokens + ${outputTokens} output tokens across ${windows} windows on ${podcast.llm.model}`);
   }
 
   return { estimatedUsd: Number(estimatedUsd.toFixed(6)), notes };
@@ -65,9 +65,13 @@ export function estimateEpisodeCost(podcast: EffectivePodcastConfig, transcript:
 
 export function estimateAlignmentCost(config: AlignmentConfig, durationSeconds?: number): CostEstimate {
   if (!config.enabled || durationSeconds == null || durationSeconds <= 0) return { estimatedUsd: 0, notes: [] };
-  const hosted =
-    config.provider === "elevenlabs-forced" ||
-    (config.provider === "auto" && Boolean(process.env.ELEVENLABS_API_KEY));
+  const hosted = config.provider === "elevenlabs-forced";
+  if (config.provider === "elevenlabs-targeted") {
+    return {
+      estimatedUsd: 0,
+      notes: ["ElevenLabs targeted alignment estimate deferred until candidate ad windows are known."]
+    };
+  }
   if (!hosted) return { estimatedUsd: 0, notes: [] };
   const minutes = durationSeconds / 60;
   const cost = minutes * config.estimatedCostPerMinuteUsd;
@@ -75,6 +79,12 @@ export function estimateAlignmentCost(config: AlignmentConfig, durationSeconds?:
     estimatedUsd: Number(cost.toFixed(6)),
     notes: [`ElevenLabs alignment estimate: ${minutes.toFixed(1)} min x $${config.estimatedCostPerMinuteUsd}/min on ${config.model}`]
   };
+}
+
+function llmProviderLabel(provider: EffectivePodcastConfig["llm"]["provider"]): string {
+  if (provider === "openai-compatible") return "OpenAI-compatible LLM";
+  if (provider === "openrouter") return "OpenRouter";
+  return "Text LLM";
 }
 
 function estimateClassifierWindows(transcript: Transcript): number {
@@ -191,7 +201,7 @@ export async function summarizeCosts(config: AppConfig): Promise<CostSummary> {
 
 function parseActualCostNote(note: string): { stage: string; model: string; actualUsd: number } | undefined {
   if (!/\bactual:/i.test(note)) return undefined;
-    const match = /\b(transcript|alignment|ad-detection|chapter-generation)\s+actual:[\s\S]*?\bon\s+([^=|]+?)\s*=\s*\$([0-9]+(?:\.[0-9]+)?)/i.exec(note);
+    const match = /\b(transcript|alignment|ad-detection|boundary-review|chapter-generation)\s+actual:[\s\S]*?\bon\s+([^=|]+?)\s*=\s*\$([0-9]+(?:\.[0-9]+)?)/i.exec(note);
   if (!match) return undefined;
   const purpose = match[1].toLowerCase();
   return {

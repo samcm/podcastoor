@@ -78,7 +78,19 @@ describe("feed", () => {
       guid: "episode-1",
       sourceUrl: "https://cdn.example.com/episode.mp3",
       sourceFingerprint: parsed.episodes[0].sourceFingerprint,
-      decisions: [],
+      decisions: [
+        {
+          start: 10,
+          end: 20,
+          action: "remove",
+          confidence: 0.95,
+          reason: "paid read",
+          advertiser: "Example Brand",
+          source: "model",
+          text: "This episode is brought to you by Example Brand. Use code sample for the offer."
+        }
+      ],
+      renderedCuts: [{ start: 9, end: 21 }],
       untimedSignals: [],
       chapters: [{ startTime: 0, title: "Start" }],
       transcript: { source: "test", format: "text/vtt", path: "/tmp/transcript.vtt", segmentCount: 1 },
@@ -116,6 +128,11 @@ describe("feed", () => {
     expect(rewritten).toContain("Podcast Proxy");
     expect(rewritten).toContain("Time saved");
     expect(rewritten).toContain("59:50");
+    expect(rewritten).toContain("Removed Ads");
+    expect(rewritten).toContain("00:00:09-00:00:21");
+    expect(rewritten).toContain("Example Brand - paid read");
+    expect(rewritten).toContain("This episode is brought to you by Example Brand.");
+    expect(rewritten).not.toContain("Original episode notes");
     expect(rewritten).toContain("application/json+chapters");
     expect(rewritten).not.toContain("Unprocessed Episode");
     expect(rewritten).not.toContain("https://cdn.example.com/unprocessed.mp3");
@@ -154,7 +171,7 @@ describe("feed", () => {
     expect(rewritten).not.toContain("https://cdn.example.com/episode.mp3");
   });
 
-  it("omits manifests from older pipeline versions", () => {
+  it("keeps completed manifests from older pipeline versions publishable", () => {
     const parsed = parseFeed(xml, "https://feeds.example.com/show.xml");
     const manifest: EpisodeManifest = {
       schemaVersion: 1,
@@ -183,7 +200,8 @@ describe("feed", () => {
       pipelineVersion: "current"
     });
 
-    expect(rewritten).not.toContain("Sample Episode");
+    expect(rewritten).toContain("Sample Episode (Ad Free)");
+    expect(rewritten).toContain("http://localhost:3729/audio/sample/");
     expect(rewritten).not.toContain("https://cdn.example.com/episode.mp3");
   });
 });

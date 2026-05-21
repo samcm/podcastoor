@@ -90,14 +90,17 @@ export interface TranscriptProviderConfig {
 
 export interface AlignmentConfig {
   enabled: boolean;
-  provider: "auto" | "elevenlabs-forced" | "segment-boundary" | "none";
+  provider: "auto" | "whisperx-local" | "elevenlabs-forced" | "elevenlabs-targeted" | "segment-boundary" | "none";
   model: string;
   estimatedCostPerMinuteUsd: number;
   requireProvider: boolean;
+  targetContextSeconds?: number;
+  targetMaxWindows?: number;
+  targetMaxClipSeconds?: number;
 }
 
 export interface LlmConfig {
-  provider: "openrouter" | "none";
+  provider: "openai-compatible" | "openrouter" | "none";
   enabled: boolean;
   model: string;
   estimatedInputUsdPerMillion: number;
@@ -106,8 +109,8 @@ export interface LlmConfig {
 }
 
 export interface LlmUsage {
-  provider: "openrouter";
-  purpose: "ad-detection" | "chapter-generation";
+  provider: "openai-compatible" | "openrouter";
+  purpose: "ad-detection" | "boundary-review" | "chapter-generation";
   model: string;
   generationId?: string;
   promptTokens?: number;
@@ -262,6 +265,8 @@ export interface SegmentDecision {
     startSegmentIndex?: number;
     endSegmentIndex?: number;
     method: "model-timestamp" | "stt-chunk" | "feed-transcript-segment" | "forced-word" | "manual";
+    startAnchorText?: string;
+    endAnchorText?: string;
   };
   text?: string;
 }
@@ -303,6 +308,7 @@ export interface EpisodeManifest {
   originalDurationSeconds?: number;
   processedDurationSeconds?: number;
   decisions: SegmentDecision[];
+  renderedCuts?: Array<{ start: number; end: number }>;
   untimedSignals: string[];
   modelNotes?: string[];
   sourceChapters?: Chapter[];

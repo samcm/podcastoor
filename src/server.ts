@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
-import type { AppConfig, EpisodeManifest } from "./types.js";
+import type { AppConfig, EpisodeManifest, LlmUsage } from "./types.js";
 import { loadConfig, resolvePodcastConfig } from "./config.js";
 import { fetchFeed, parseFeed, rewriteFeed } from "./feed.js";
 import { episodePaths, podcastAssetPaths, readManifest } from "./storage.js";
@@ -431,35 +431,59 @@ function renderPodcastList(
 ): string {
   return page(
     "Podcast Proxy",
-    `<header>
-      <h1>Podcast Proxy</h1>
-      <p>${automation.running ? "Processing is running" : "Processing is idle"}${automation.lastFinishedAt ? ` · last finished ${renderLocalTime(automation.lastFinishedAt)}` : ""}</p>
-      <p>Autonomous mode is enabled when configured: process on startup, then repeat on the configured interval. <a href="/costs">Cost dashboard</a></p>
+    `<header class="app-header">
+      <div>
+        <p class="eyebrow">Podcastoor</p>
+        <h1>Podcast Proxy</h1>
+        <p><span class="status-dot ${automation.running ? "running" : ""}"></span>${automation.running ? "Processing is running" : "Processing is idle"}${
+          automation.lastFinishedAt ? ` · last finished ${renderLocalTime(automation.lastFinishedAt)}` : ""
+        }</p>
+      </div>
+      <nav class="header-actions"><a href="/costs">Cost dashboard</a><a href="/api/queue">Queue JSON</a></nav>
     </header>
-    <main class="panel table-panel podcast-list">
-      <table>
-        <thead><tr><th>Podcast</th><th>Manifests</th><th>Rendered</th><th>Transcription</th><th>Classifier</th><th>Latest</th><th>Feed</th></tr></thead>
-        <tbody>
-          ${podcasts
-            .map(
-              (podcast) => `<tr>
-                <td><a href="/podcasts/${podcast.slug}">${escapeHtml(podcast.name)}</a></td>
-                <td>${podcast.manifestCount}</td>
-                <td>${podcast.processedCount}</td>
-                <td>${escapeHtml(podcast.transcriptionModel)}</td>
-                <td>${escapeHtml(podcast.classifierModel)}</td>
-                <td>${podcast.latestEpisode ? escapeHtml(podcast.latestEpisode.title) : "None yet"}</td>
-                <td><a href="/feeds/${podcast.slug}.xml">RSS</a> · <a href="/feeds/${podcast.slug}/ad-free.xml">Alt</a></td>
-              </tr>`
-            )
-            .join("")}
-        </tbody>
-      </table>
+    <main class="home-stack">
+      <section class="panel podcasts-panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Feeds</p>
+            <h2>Podcasts</h2>
+          </div>
+          <span>${podcasts.length} configured</span>
+        </div>
+        <div class="podcast-grid">
+          ${podcasts.map(renderPodcastSummaryCard).join("") || `<p class="empty">No podcasts configured.</p>`}
+        </div>
+      </section>
     </main>
     ${renderControlPanel(podcasts)}
     ${renderQueue(queue)}
     ${renderActivityLog(activity)}`
   );
+}
+
+function renderPodcastSummaryCard(podcast: Awaited<ReturnType<typeof listPodcastSummaries>>[number]): string {
+  const latest = podcast.latestEpisode;
+  return `<article class="podcast-card">
+    <div class="podcast-card-top">
+      <div>
+        <h3><a href="/podcasts/${podcast.slug}">${escapeHtml(podcast.name)}</a></h3>
+        <p>${latest ? escapeHtml(latest.title) : "No processed episodes yet"}</p>
+      </div>
+      <span class="state ${escapeHtml(latest?.status ?? "skipped")}">${escapeHtml(latest?.status ?? "empty")}</span>
+    </div>
+    <dl class="metric-grid compact">
+      <div><dt>Manifests</dt><dd>${podcast.manifestCount}</dd></div>
+      <div><dt>Rendered</dt><dd>${podcast.processedCount}</dd></div>
+      <div><dt>Latest</dt><dd>${renderLocalTime(latest?.pubDate)}</dd></div>
+      <div><dt>Transcription</dt><dd>${escapeHtml(podcast.transcriptionModel)}</dd></div>
+      <div><dt>Classifier</dt><dd>${escapeHtml(podcast.classifierModel)}</dd></div>
+    </dl>
+    <div class="link-row">
+      <a href="/podcasts/${podcast.slug}">Open</a>
+      <a href="/feeds/${podcast.slug}.xml">RSS</a>
+      <a href="/feeds/${podcast.slug}/ad-free.xml">Alt RSS</a>
+    </div>
+  </article>`;
 }
 
 function renderControlPanel(podcasts: Awaited<ReturnType<typeof listPodcastSummaries>>): string {
@@ -517,9 +541,28 @@ function renderQueue(queue: QueueEpisode[]): string {
       <td>${lastError}</td>
     </tr>`;
   });
+  const cards = queue.slice(0, 30).map((entry) => {
+    const lastError = entry.lastError ? `<code>${escapeHtml(entry.lastError.slice(0, 220))}</code>` : "";
+    return `<article class="queue-card">
+      <div class="queue-card-head">
+        <span class="state ${escapeHtml(entry.state)}">${escapeHtml(entry.state)}</span>
+        <strong>${entry.attempts}/${entry.maxAttempts}</strong>
+      </div>
+      <h3><a href="/podcasts/${entry.podcastSlug}">${escapeHtml(entry.episodeTitle)}</a></h3>
+      <dl class="metric-grid compact">
+        <div><dt>Podcast</dt><dd>${escapeHtml(entry.podcastSlug)}</dd></div>
+        <div><dt>Published</dt><dd>${renderLocalTime(entry.pubDate)}</dd></div>
+        <div><dt>Last Attempt</dt><dd>${renderLocalTime(entry.lastAttemptAt)}</dd></div>
+        <div><dt>Next Retry</dt><dd>${renderLocalTime(entry.nextRetryAt)}</dd></div>
+        <div><dt>Stage</dt><dd>${escapeHtml(entry.currentStage)}</dd></div>
+      </dl>
+      ${lastError ? `<div class="queue-error">${lastError}</div>` : ""}
+    </article>`;
+  });
   return `<section class="panel queue">
     <div class="section-head"><h2>Processing Queue</h2><a href="/api/queue">JSON</a></div>
-    <table>
+    <div class="queue-cards">${cards.length ? cards.join("") : `<p class="empty">No queue state yet.</p>`}</div>
+    <table class="queue-table">
       <thead><tr><th>State</th><th>Podcast</th><th>Episode</th><th>Published</th><th>Attempts</th><th>Last Attempt</th><th>Next Retry</th><th>Stage</th><th>Last Error</th></tr></thead>
       <tbody>${rows.length ? rows.join("") : `<tr><td colspan="9">No queue state yet.</td></tr>`}</tbody>
     </table>
@@ -549,10 +592,14 @@ function renderActivityLog(activity: ActivityEvent[]): string {
 function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof getAutomationState>): string {
   return page(
     deepDive.name,
-    `<header>
-      <a href="/">Back</a>
-      <h1>${escapeHtml(deepDive.name)}</h1>
-      <p>${escapeHtml(deepDive.feedUrl)}</p>
+    `<header class="app-header">
+      <div>
+        <a class="back-link" href="/">Back</a>
+        <p class="eyebrow">Podcast</p>
+        <h1>${escapeHtml(deepDive.name)}</h1>
+        <p class="feed-url" title="${escapeHtml(deepDive.feedUrl)}">${escapeHtml(deepDive.feedUrl)}</p>
+      </div>
+      <nav class="header-actions"><a href="${escapeHtml(deepDive.subscriptionUrl)}">RSS</a><a href="${escapeHtml(deepDive.alternateSubscriptionUrl)}">Alt RSS</a></nav>
     </header>
     ${renderPodcastOverview(deepDive)}
     <section class="panel meta">
@@ -576,28 +623,30 @@ function renderPodcastDeepDive(deepDive: DeepDive, automation: ReturnType<typeof
           const transcriptCost = episode.transcript?.costUsd ?? 0;
           const textLlmCost = (episode.llm ?? []).reduce((sum, usage) => sum + (usage.costUsd ?? 0), 0);
           const transcriptSegments = episode.transcript?.segmentCount ?? episode.ui.transcriptSegments.length;
-          return `<article class="episode">
+          return `<article class="episode" id="${escapeHtml(episode.episodeKey)}">
             <div class="episode-head">
-              <h2>${escapeHtml(episode.title)}</h2>
-              <span>${escapeHtml(episode.audio.status)}</span>
+              <div>
+                <p class="eyebrow">${renderLocalTime(episode.pubDate)}</p>
+                <h2>${escapeHtml(episode.title)}</h2>
+              </div>
+              <span class="state ${escapeHtml(episode.audio.status)}">${escapeHtml(episode.audio.status)}</span>
             </div>
-            <dl>
-              <dt>Published</dt><dd>${renderLocalTime(episode.pubDate)}</dd>
-              <dt>RSS Duration</dt><dd>${formatSeconds(episode.originalDurationSeconds)}</dd>
-              <dt>Source Audio</dt><dd>${formatSeconds(sourceDuration)}</dd>
-              <dt>Processed Audio</dt><dd>${formatSeconds(processedDuration)}</dd>
-              <dt>Time Saved</dt><dd>${formatSeconds(timeSaved(sourceDuration, processedDuration))}${episode.audio.jingleInsertedCount ? ` · ${episode.audio.jingleInsertedCount} markers` : ""}</dd>
-              <dt>Render</dt><dd>${escapeHtml(renderQualityLabel(episode.audio))}</dd>
-              <dt>Decisions</dt><dd>${episode.decisions.length}</dd>
-              <dt>Untimed Signals</dt><dd>${episode.untimedSignals.length}</dd>
-              <dt>Chapters</dt><dd>${episode.chapters.length}</dd>
-              <dt>Total Cost</dt><dd>$${episode.costs.actualUsd.toFixed(6)}</dd>
-              <dt>Transcript Model</dt><dd>${escapeHtml(episode.transcript?.model ?? episode.transcript?.source ?? "unknown")}</dd>
-              <dt>Transcript Cost</dt><dd>$${transcriptCost.toFixed(6)}${transcriptSegments ? ` · ${transcriptSegments} segments` : ""}</dd>
-              <dt>Ad Model</dt><dd>${escapeHtml(llmModelLabel(episode, "ad-detection"))}</dd>
-              <dt>Chapter Model</dt><dd>${escapeHtml(llmModelLabel(episode, "chapter-generation"))}</dd>
-              <dt>Text LLM Cost</dt><dd>$${textLlmCost.toFixed(6)} · ${(episode.llm ?? []).length} calls</dd>
-              <dt>Alignment</dt><dd>${renderAlignmentSummary(episode)}</dd>
+            <dl class="metric-grid episode-metrics">
+              <div><dt>RSS Duration</dt><dd>${formatSeconds(episode.originalDurationSeconds)}</dd></div>
+              <div><dt>Source Audio</dt><dd>${formatSeconds(sourceDuration)}</dd></div>
+              <div><dt>Processed Audio</dt><dd>${formatSeconds(processedDuration)}</dd></div>
+              <div><dt>Time Saved</dt><dd>${formatSeconds(timeSaved(sourceDuration, processedDuration))}${episode.audio.jingleInsertedCount ? ` · ${episode.audio.jingleInsertedCount} markers` : ""}</dd></div>
+              <div><dt>Render</dt><dd>${escapeHtml(renderQualityLabel(episode.audio))}</dd></div>
+              <div><dt>Decisions</dt><dd>${episode.decisions.length}</dd></div>
+              <div><dt>Chapters</dt><dd>${episode.chapters.length}</dd></div>
+              <div><dt>Total Cost</dt><dd>$${episode.costs.actualUsd.toFixed(6)}</dd></div>
+              <div><dt>Transcript</dt><dd>${escapeHtml(episode.transcript?.model ?? episode.transcript?.source ?? "unknown")}</dd></div>
+              <div><dt>Transcript Cost</dt><dd>$${transcriptCost.toFixed(6)}${transcriptSegments ? ` · ${transcriptSegments} segments` : ""}</dd></div>
+              <div><dt>Ad Model</dt><dd>${escapeHtml(llmModelLabel(episode, "ad-detection"))}</dd></div>
+              <div><dt>Boundary Model</dt><dd>${escapeHtml(llmModelLabel(episode, "boundary-review"))}</dd></div>
+              <div><dt>Chapter Model</dt><dd>${escapeHtml(llmModelLabel(episode, "chapter-generation"))}</dd></div>
+              <div><dt>Text LLM</dt><dd>$${textLlmCost.toFixed(6)} · ${(episode.llm ?? []).length} calls</dd></div>
+              <div><dt>Alignment</dt><dd>${renderAlignmentSummary(episode)}</dd></div>
             </dl>
             ${renderArtifactLinks(episode)}
             ${renderAudioCompare(episode)}
@@ -695,8 +744,8 @@ function renderEpisodeControls(podcastSlug: string, episode: UiEpisode): string 
 function renderAudioCompare(episode: UiEpisode): string {
   if (!episode.ui.sourceAudioUrl && !episode.ui.processedAudioUrl) return "";
   return `<section class="compare">
-    ${episode.ui.sourceAudioUrl ? `<div><h3>Original Download</h3><audio data-role="source-audio" controls preload="none" src="${episode.ui.sourceAudioUrl}"></audio></div>` : ""}
-    ${episode.ui.processedAudioUrl ? `<div><h3>Processed</h3><audio data-role="processed-audio" controls preload="none" src="${episode.ui.processedAudioUrl}"></audio></div>` : ""}
+    ${episode.ui.sourceAudioUrl ? `<div class="audio-panel"><h3>Original</h3><audio data-role="source-audio" controls preload="none" src="${episode.ui.sourceAudioUrl}"></audio></div>` : ""}
+    ${episode.ui.processedAudioUrl ? `<div class="audio-panel"><h3>Processed</h3><audio data-role="processed-audio" controls preload="none" src="${episode.ui.processedAudioUrl}"></audio></div>` : ""}
   </section>`;
 }
 
@@ -968,128 +1017,160 @@ function page(title: string, body: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)}</title>
   <style>
-    :root { color-scheme: light; --ink:#1d2733; --muted:#5e6f80; --line:#d9e1e8; --bg:#f5f7f9; --panel:#fff; --accent:#0f766e; --accent-soft:#e7f4f1; --shadow:0 10px 30px rgba(29,39,51,.06); }
+    :root { color-scheme: light; --ink:#17202a; --muted:#65717d; --soft:#8a96a3; --line:#d7dde3; --bg:#f4f6f8; --panel:#ffffff; --panel-2:#fafbfc; --accent:#0f766e; --accent-ink:#115e59; --accent-soft:#e8f3f1; --red:#b42318; --amber:#b45309; --green:#166534; --blue:#1d4ed8; --shadow:0 14px 36px rgba(23,32,42,.07); }
     * { box-sizing:border-box; }
-    body { margin:0; font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
-    body > header, body > main, body > section { width:min(1120px, calc(100% - 32px)); margin:0 auto; padding:24px; }
-    header { padding-top:28px; padding-bottom:16px; }
-    header p { margin:6px 0 0; color:var(--muted); overflow-wrap:anywhere; }
-    h1 { margin:0 0 6px; font-size:28px; line-height:1.14; font-weight:700; }
-    h2 { margin:0; font-size:17px; }
-    h3 { margin:16px 0 6px; font-size:13px; text-transform:uppercase; color:var(--muted); }
-    a { color:var(--accent); text-decoration:none; }
-    .panel, .episode { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
-    .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-    .section-head h2 { font-size:16px; }
-    .table-panel { overflow-x:auto; }
+    html { background:var(--bg); }
+    body { margin:0; font:14px/1.48 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
+    body > header, body > main, body > section { width:min(1180px, calc(100% - 32px)); margin:0 auto; padding:22px; }
+    a { color:var(--accent-ink); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    h1, h2, h3, p, dl, dd { margin:0; }
+    h1 { font-size:30px; line-height:1.12; font-weight:760; }
+    h2 { font-size:18px; line-height:1.2; font-weight:720; }
+    h3 { font-size:14px; line-height:1.25; font-weight:720; }
+    button, input, select { font:inherit; }
+    code { color:#344054; white-space:normal; overflow-wrap:anywhere; }
+    .app-header { display:flex; justify-content:space-between; gap:18px; align-items:flex-end; padding-top:26px; padding-bottom:12px; }
+    .app-header p { margin-top:7px; color:var(--muted); overflow-wrap:anywhere; font-size:13px; }
+    .app-header p.feed-url { font-size:12px; color:var(--soft); }
+    .eyebrow { color:var(--soft); font-size:11px; font-weight:740; text-transform:uppercase; }
+    .back-link { display:inline-block; margin-bottom:10px; }
+    .header-actions, .link-row, .artifact-links { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .header-actions a, .link-row a, .artifact-links a { border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--accent-ink); padding:7px 10px; min-height:34px; display:inline-flex; align-items:center; }
+    .link-row a, .artifact-links a { font-size:12px; font-weight:650; padding:5px 9px; min-height:30px; }
+    .status-dot { width:9px; height:9px; display:inline-block; margin-right:8px; border-radius:50%; background:var(--soft); vertical-align:1px; }
+    .status-dot.running { background:var(--green); box-shadow:0 0 0 4px rgba(22,101,52,.1); }
+    .panel, .episode, .podcast-card { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
+    .home-stack { padding-top:8px; padding-bottom:0; }
+    .section-head { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
+    .section-head span { color:var(--muted); font-size:12px; }
+    .podcasts-panel { padding:18px; }
+    .podcast-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin-top:14px; }
+    .podcast-card { box-shadow:none; padding:16px; display:grid; gap:14px; min-width:0; transition:border-color .12s; }
+    .podcast-card:hover { border-color:#b8c4ce; }
+    .podcast-card-top { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+    .podcast-card h3 { font-size:15px; font-weight:740; letter-spacing:-.01em; }
+    .podcast-card p { margin-top:5px; color:var(--muted); font-size:13px; line-height:1.45; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+    .metric-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:10px; }
+    .metric-grid.compact { grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px 12px; }
+    .metric-grid div, .meta div, .overview-stats div { min-width:0; border-top:1px solid var(--line); padding-top:8px; }
+    dt, .meta span, .overview-stats span { display:block; color:var(--soft); font-size:11px; font-weight:700; text-transform:uppercase; }
+    dd, .overview-stats strong, .meta strong { display:block; margin-top:3px; min-width:0; overflow-wrap:anywhere; }
+    .meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; }
+    .meta code { display:block; margin-top:4px; font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+    .table-panel, .queue, .cost-table, .audit-table, details.transcript { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    .audit-table, details.transcript { scroll-padding-left:8px; }
     table { width:100%; border-collapse:collapse; }
-    th, td { padding:11px 10px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
-    th { color:var(--muted); font-size:12px; text-transform:uppercase; }
-    .meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
-    .meta div { display:flex; flex-direction:column; gap:4px; min-width:0; }
-    .meta span, dt { color:var(--muted); font-size:12px; text-transform:uppercase; }
-    .podcast-overview { display:grid; grid-template-columns:160px minmax(0,1fr); gap:18px; align-items:start; margin-bottom:14px; }
-    .podcast-art { width:160px; aspect-ratio:1; object-fit:cover; border:1px solid var(--line); border-radius:8px; background:#fff; }
-    .placeholder-art { display:flex; align-items:center; justify-content:center; color:#991b1b; font-weight:800; text-transform:uppercase; border-color:rgba(153,27,27,.35); }
+    th, td { padding:10px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--soft); font-size:11px; font-weight:750; text-transform:uppercase; }
+    tbody tr:hover td { background:#fbfcfd; }
+    .podcast-overview { display:grid; grid-template-columns:156px minmax(0,1fr); gap:20px; align-items:start; margin-bottom:14px; }
+    .podcast-art { width:156px; aspect-ratio:1; object-fit:cover; border:1px solid var(--line); border-radius:10px; background:#fff; box-shadow:0 2px 8px rgba(23,32,42,.08); }
+    .placeholder-art { display:flex; align-items:center; justify-content:center; color:var(--red); font-weight:800; text-transform:uppercase; border-color:rgba(180,35,24,.35); }
     .podcast-overview-body { min-width:0; }
-    .podcast-overview p { margin:8px 0 0; color:var(--muted); max-width:84ch; }
+    .podcast-overview p { margin-top:10px; color:var(--muted); max-width:88ch; line-height:1.6; font-size:13px; }
     .overview-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:10px 14px; margin-top:16px; }
-    .overview-stats div { min-width:0; border-top:1px solid var(--line); padding-top:8px; }
-    .overview-stats span { display:block; color:var(--muted); font-size:12px; text-transform:uppercase; }
-    .overview-stats strong { display:block; margin-top:3px; overflow-wrap:anywhere; }
-    code { white-space:normal; overflow-wrap:anywhere; }
-    .controls { margin:0 auto 14px; display:grid; gap:12px; }
+    .controls { margin:0 auto 14px; padding:18px; display:grid; gap:14px; }
     .controls form, .inline-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
-    .controls label { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px; text-transform:uppercase; }
-    .controls input, .controls select { min-height:34px; border:1px solid var(--line); border-radius:5px; padding:5px 8px; background:#fff; color:var(--ink); }
-    .controls label:has(input[type="checkbox"]) { flex-direction:row; align-items:center; text-transform:none; color:var(--ink); }
-    .controls button, .inline-controls button { min-height:34px; border:1px solid rgba(15,118,110,.35); border-radius:5px; background:var(--accent-soft); color:#115e59; padding:6px 10px; cursor:pointer; }
+    .controls label { display:flex; flex-direction:column; gap:5px; color:var(--soft); font-size:11px; font-weight:700; text-transform:uppercase; }
+    .controls input, .controls select { min-height:36px; border:1px solid var(--line); border-radius:6px; padding:6px 9px; background:#fff; color:var(--ink); }
+    .controls input:focus, .controls select:focus, button:focus-visible, .timeline:focus-visible { outline:2px solid rgba(15,118,110,.32); outline-offset:2px; }
+    .controls label:has(input[type="checkbox"]) { flex-direction:row; align-items:center; gap:7px; text-transform:none; color:var(--ink); font-size:13px; font-weight:500; }
+    .controls button, .inline-controls button, .cut-list button, .transcript button, .audit-table button { min-height:34px; border:1px solid rgba(15,118,110,.32); border-radius:6px; background:var(--accent-soft); color:var(--accent-ink); padding:6px 10px; cursor:pointer; }
     .inline-controls { margin-top:12px; }
-    .artifact-links { padding:0; margin-top:12px; display:flex; flex-wrap:wrap; gap:10px; }
-    .artifact-links a { border:1px solid var(--line); border-radius:5px; background:#fff; padding:4px 8px; }
-    .episodes { display:grid; gap:14px; min-width:0; }
+    .artifact-links { margin-top:12px; padding:0; }
+    .episodes { display:grid; gap:14px; min-width:0; padding-top:0; }
     .episode { padding:18px; min-width:0; }
     .episode > * { min-width:0; }
-    .episode-head { display:flex; justify-content:space-between; gap:12px; align-items:start; }
-    .episode-head span { border:1px solid var(--line); border-radius:999px; padding:3px 9px; color:var(--muted); }
-    dl { display:grid; grid-template-columns:130px 1fr; gap:6px 12px; margin:14px 0 0; }
-    dd { margin:0; min-width:0; overflow-wrap:anywhere; }
+    .episode-head { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; }
+    .episode-head h2 { margin-top:2px; font-size:16px; }
+    .episode-metrics { margin-top:14px; }
     ul, ol { margin:0; padding-left:20px; }
-    .podcast-list table { min-width:820px; }
-    .queue { margin:0 auto 14px; overflow-x:auto; }
-    .queue table { min-width:980px; font-size:12px; }
+    .queue { margin:0 auto 14px; padding:18px; }
+    .queue table { min-width:1040px; font-size:12px; margin-top:10px; }
     .queue code { color:var(--muted); }
-    .cost-table { margin:14px auto; overflow-x:auto; }
-    .cost-table table { min-width:680px; }
-    .state { display:inline-flex; border:1px solid var(--line); border-radius:999px; padding:2px 7px; color:var(--muted); background:#fff; }
-    .state.running, .state.queued { border-color:rgba(15,118,110,.35); color:#115e59; background:rgba(15,118,110,.08); }
-    .state.completed { border-color:rgba(22,163,74,.35); color:#166534; background:rgba(22,163,74,.08); }
-    .state.failed, .state.waiting-for-credits { border-color:rgba(217,119,6,.35); color:#92400e; background:rgba(245,158,11,.10); }
-    .state.quarantined { border-color:rgba(220,38,38,.35); color:#991b1b; background:rgba(220,38,38,.08); }
-    .activity { margin:0 auto 14px; }
-    .activity ol { display:grid; gap:8px; padding-left:0; list-style:none; margin-top:12px; }
-    .activity li { display:grid; grid-template-columns:170px minmax(130px,1fr) minmax(80px,120px) minmax(120px,1.4fr); gap:8px; align-items:start; border-top:1px solid var(--line); padding-top:8px; }
+    .queue-cards { display:none; }
+    .queue-card { border:1px solid var(--line); border-radius:8px; padding:14px; background:#fff; display:grid; gap:10px; }
+    .queue-card-head { display:flex; justify-content:space-between; gap:10px; align-items:center; }
+    .queue-card h3 { font-size:14px; font-weight:720; }
+    .queue-card h3 a { color:var(--ink); }
+    .queue-card h3 a:hover { color:var(--accent-ink); }
+    .queue-error { margin-top:10px; padding:8px 10px; background:rgba(180,35,24,.05); border-left:3px solid rgba(180,35,24,.28); border-radius:0 5px 5px 0; }
+    .queue-error code { display:block; font-size:12px; color:var(--muted); white-space:pre-wrap; overflow-wrap:anywhere; }
+    .cost-table { margin:14px auto; padding:18px; }
+    .cost-table table { min-width:680px; margin-top:10px; }
+    .state { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:6px; padding:3px 7px; color:var(--muted); background:#fff; white-space:nowrap; font-size:12px; }
+    .state.running, .state.queued { border-color:rgba(15,118,110,.35); color:var(--accent-ink); background:rgba(15,118,110,.08); }
+    .state.completed { border-color:rgba(22,101,52,.35); color:var(--green); background:rgba(22,101,52,.08); }
+    .state.failed, .state.waiting-for-credits, .state.dry-run { border-color:rgba(180,83,9,.35); color:var(--amber); background:rgba(180,83,9,.08); }
+    .state.quarantined { border-color:rgba(180,35,24,.35); color:var(--red); background:rgba(180,35,24,.08); }
+    .activity { margin:0 auto 14px; padding:18px; }
+    .activity ol { display:grid; gap:0; padding-left:0; list-style:none; margin-top:12px; }
+    .activity li { display:grid; grid-template-columns:170px minmax(120px,1fr) minmax(84px,130px) minmax(120px,1.4fr); gap:8px; align-items:start; border-top:1px solid var(--line); padding:9px 0; }
     .activity li:first-child { border-top:0; padding-top:0; }
-    .activity li.warn strong { color:#9a3412; }
-    .activity li.error strong { color:#991b1b; }
+    .activity li.warn strong { color:var(--amber); }
+    .activity li.error strong { color:var(--red); }
     .activity time, .activity span, .activity em { color:var(--muted); font-style:normal; }
     .activity code { grid-column:1 / -1; color:var(--muted); font-size:12px; }
     audio { width:100%; height:34px; }
-    .compare { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; max-width:100%; margin-top:14px; }
-    .timeline-block { max-width:100%; margin-top:14px; padding:0; }
+    .compare { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; max-width:100%; margin-top:14px; }
+    .audio-panel { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel-2); }
+    .audio-panel h3 { color:var(--soft); font-size:11px; text-transform:uppercase; margin-bottom:8px; }
+    .timeline-block { max-width:100%; margin-top:16px; padding:14px; border:1px solid var(--line); border-radius:8px; background:var(--panel-2); }
     .timeline-head { display:flex; justify-content:space-between; gap:12px; align-items:end; }
-    .timeline-head span { color:var(--muted); font-size:12px; }
-    .timeline-label { display:flex; justify-content:space-between; margin-top:10px; color:var(--muted); font-size:12px; }
-    .timeline { position:relative; height:30px; border:1px solid var(--line); border-radius:6px; background:linear-gradient(90deg,#f8fafc,#eef2f7); overflow:hidden; cursor:pointer; }
-    .timeline:focus-visible { outline:2px solid rgba(15,118,110,.35); outline-offset:2px; }
-    .timeline.processed { background:linear-gradient(90deg,#f9fafb,#f1f5f9); }
-    button { font:inherit; color:inherit; }
-    .cut { position:absolute; top:0; bottom:0; padding:0; background:rgba(220,38,38,.65); border-left:1px solid rgba(127,29,29,.8); border-right:1px solid rgba(127,29,29,.8); pointer-events:none; }
-    .tick { position:absolute; top:0; bottom:0; width:4px; padding:0; background:rgba(15,118,110,.85); transform:translateX(-1px); pointer-events:none; }
-    .splice { position:absolute; top:0; bottom:0; width:2px; background:rgba(37,99,235,.85); pointer-events:none; }
-    .legend { display:flex; gap:16px; align-items:center; margin-top:6px; color:var(--muted); font-size:12px; }
+    .timeline-head h3 { font-size:14px; color:var(--ink); text-transform:none; }
+    .timeline-head span, .timeline-label, .legend { color:var(--muted); font-size:12px; }
+    .timeline-label { display:flex; justify-content:space-between; margin-top:11px; }
+    .timeline { position:relative; height:34px; border:1px solid #c8d1da; border-radius:6px; background:#edf1f4; overflow:hidden; cursor:pointer; box-shadow:inset 0 1px 2px rgba(23,32,42,.05); }
+    .timeline::after { content:""; position:absolute; inset:0; pointer-events:none; border:2px solid transparent; }
+    .timeline:hover::after { border-color:rgba(15,118,110,.3); }
+    .timeline.processed { background:#eef5f3; }
+    .cut { position:absolute; top:0; bottom:0; padding:0; background:rgba(180,35,24,.72); border-left:1px solid rgba(127,29,29,.85); border-right:1px solid rgba(127,29,29,.85); pointer-events:none; }
+    .tick { position:absolute; top:0; bottom:0; width:4px; padding:0; background:rgba(15,118,110,.9); transform:translateX(-1px); pointer-events:none; }
+    .splice { position:absolute; top:0; bottom:0; width:3px; background:rgba(29,78,216,.9); pointer-events:none; }
+    .legend { display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-top:8px; }
     .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
-    .legend .red { background:rgba(220,38,38,.65); }
-    .legend .green { background:rgba(15,118,110,.85); }
-    .legend .blue { background:rgba(37,99,235,.85); }
+    .legend .red { background:rgba(180,35,24,.72); }
+    .legend .green { background:rgba(15,118,110,.9); }
+    .legend .blue { background:rgba(29,78,216,.9); }
     .cut-list { display:grid; gap:8px; margin:10px 0 0; padding-left:0; list-style:none; }
-    .cut-list li { display:grid; grid-template-columns:auto auto 1fr auto; gap:8px; align-items:center; padding:8px; border:1px solid var(--line); border-radius:6px; background:#fafafa; }
-    .cut-list button, .transcript button, .audit-table button { min-height:30px; border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--accent); padding:3px 7px; cursor:pointer; }
+    .cut-list li { display:grid; grid-template-columns:auto auto 1fr auto; gap:8px; align-items:center; padding:8px; border:1px solid var(--line); border-radius:6px; background:#fff; }
     .cut-list small { color:var(--muted); white-space:nowrap; }
-    .audit-table { max-width:100%; padding:0; margin-top:14px; overflow-x:auto; }
-    .audit-table table { min-width:900px; font-size:12px; }
+    .audit-table { max-width:100%; padding:0; margin-top:14px; }
+    .audit-table table { min-width:920px; font-size:12px; }
     .audit-table th, .audit-table td { padding:8px 10px; }
     .audit-table td:first-child, .audit-table td:nth-child(2), .audit-table td:nth-child(3), .audit-table td:nth-child(4), .audit-table td:nth-child(5), .audit-table td:nth-child(6) { white-space:nowrap; }
     .transcript-wrap { max-width:100%; padding:0; margin-top:16px; }
-    details.transcript { max-width:100%; margin-top:10px; border-top:1px solid var(--line); padding-top:12px; overflow-x:auto; }
-    summary { cursor:pointer; color:var(--accent); font-weight:600; }
+    details.transcript { max-width:100%; margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:11px; background:#fff; }
+    summary { cursor:pointer; color:var(--accent-ink); font-weight:700; }
     .transcript table { min-width:880px; margin-top:10px; font-size:12px; }
     .transcript td:first-child, .transcript td:nth-child(2), .transcript td:nth-child(3) { white-space:nowrap; color:var(--muted); width:74px; }
-    .removed-row td { background:rgba(220,38,38,.08); }
+    .removed-row td { background:rgba(180,35,24,.08); }
     .removed-row td:last-child { text-decoration:line-through; color:#7f1d1d; }
-    .partial-row td { background:rgba(245,158,11,.10); }
-    .pill { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:999px; padding:2px 7px; color:var(--muted); font-size:11px; }
-    .pill.danger { border-color:rgba(220,38,38,.35); color:#991b1b; background:rgba(220,38,38,.08); }
-    .pill.warn { border-color:rgba(217,119,6,.35); color:#92400e; background:rgba(245,158,11,.10); }
+    .partial-row td { background:rgba(180,83,9,.08); }
+    .pill { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:6px; padding:2px 7px; color:var(--muted); font-size:11px; }
+    .pill.danger { border-color:rgba(180,35,24,.35); color:var(--red); background:rgba(180,35,24,.08); }
+    .pill.warn { border-color:rgba(180,83,9,.35); color:var(--amber); background:rgba(180,83,9,.08); }
+    .empty { color:var(--muted); }
     @media (max-width: 760px) {
-      body > header, body > main, body > section { width:calc(100% - 20px); padding:16px; }
-      header { padding-top:20px; }
+      body > header, body > main, body > section { width:calc(100% - 20px); padding:14px; }
+      .app-header { align-items:flex-start; flex-direction:column; padding-top:18px; }
+      .header-actions a, .link-row a, .artifact-links a { width:auto; min-height:40px; }
       h1 { font-size:24px; }
-      .section-head { align-items:flex-start; flex-direction:column; }
+      .section-head, .episode-head, .timeline-head { align-items:flex-start; flex-direction:column; }
+      .podcasts-panel, .controls, .queue, .activity, .cost-table, .episode { padding:14px; }
+      .podcast-grid, .metric-grid, .metric-grid.compact, .meta, .overview-stats { grid-template-columns:1fr; }
       .controls form, .inline-controls { display:grid; grid-template-columns:1fr; align-items:stretch; }
       .controls label, .controls input, .controls select, .controls button, .inline-controls button { width:100%; min-height:42px; }
-      .controls label:has(input[type="checkbox"]) { min-height:42px; justify-content:flex-start; gap:8px; }
+      .controls label:has(input[type="checkbox"]) { min-height:42px; justify-content:flex-start; }
       .controls label:has(input[type="checkbox"]) input { width:auto; min-height:auto; flex:0 0 auto; }
-      .meta { grid-template-columns:1fr; gap:10px; }
       .podcast-overview { grid-template-columns:1fr; }
-      .podcast-art { width:min(180px, 100%); }
-      .episode { padding:16px; }
-      .episode-head { flex-direction:column; }
-      dl { grid-template-columns:1fr; gap:3px 0; }
-      dd { margin-bottom:8px; }
-      .compare { grid-template-columns:1fr; padding-left:0; padding-right:0; width:100%; }
-      .timeline-head { align-items:flex-start; flex-direction:column; }
+      .podcast-art { width:min(160px, 100%); border-radius:8px; }
+      .episode-head h2 { font-size:15px; }
+      .compare { grid-template-columns:1fr; }
       .activity li { grid-template-columns:1fr; }
+      .queue-table { display:none; }
+      .queue-cards { display:grid; gap:10px; margin-top:12px; }
       .cut-list li { grid-template-columns:1fr 1fr; }
       .cut-list span, .cut-list small { grid-column:1 / -1; }
     }
@@ -1415,7 +1496,7 @@ function renderQualityLabel(audio: EpisodeManifest["audio"]): string {
   return audio.renderMode ?? "unknown";
 }
 
-function llmModelLabel(episode: UiEpisode, purpose: "ad-detection" | "chapter-generation"): string {
+function llmModelLabel(episode: UiEpisode, purpose: LlmUsage["purpose"]): string {
   const models = Array.from(new Set((episode.llm ?? []).filter((usage) => usage.purpose === purpose).map((usage) => usage.model).filter(Boolean)));
   return models.length ? models.join(", ") : "none recorded";
 }

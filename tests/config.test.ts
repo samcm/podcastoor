@@ -10,12 +10,15 @@ describe("config", () => {
     expect(config.podcasts).toEqual({});
     expect(config.categories.preferred).toEqual([]);
     expect(config.categories.muted).toEqual([]);
-    expect(config.llm.model).toBe("qwen/qwen3.6-flash");
+    expect(config.llm.provider).toBe("openai-compatible");
+    expect(config.llm.model).toBe("deepseek-v4-pro");
     expect(config.transcripts.providers.openRouter.mode).toBe("audioChat");
     expect(config.transcripts.providers.openRouter.model).toBe("xiaomi/mimo-v2-omni");
     expect(config.artwork.model).toBe("google/gemini-3.1-flash-image-preview");
     expect(config.alignment.provider).toBe("auto");
-    expect(config.alignment.model).toBe("elevenlabs-forced-alignment");
+    expect(config.alignment.model).toBe("whisperx");
+    expect(config.alignment.requireProvider).toBe(true);
+    expect(config.detection.postPaddingSeconds).toBe(0);
     expect(config.automation.processOnStartup).toBe(true);
   });
 

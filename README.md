@@ -2,7 +2,7 @@
 
 A conservative podcast RSS proxy for Pocket Casts. It processes recent episodes, removes model-detected ad/noise windows, rewrites feed metadata, and serves processed audio, transcripts, and chapters from disk.
 
-The default mode is autonomous: on server startup it fetches the configured feeds, processes the last 7 days, downloads audio, transcribes timestamped chunks with an OpenRouter audio-capable model, classifies segments with OpenRouter/Qwen, renders processed audio, and serves rewritten feeds/assets.
+The default mode is autonomous: on server startup it fetches the configured feeds, processes the last 7 days, downloads audio, transcribes timestamped chunks with an OpenRouter audio-capable model, classifies segments with an OpenAI-compatible text endpoint, renders processed audio, and serves rewritten feeds/assets.
 
 ## Current Shape
 
@@ -18,7 +18,7 @@ The default mode is autonomous: on server startup it fetches the configured feed
 - Disk-backed manifests under `data/podcasts/:podcastSlug/episodes/:episodeKey/manifest.json`.
 - Podlove Simple Chapters parsing and Podcasting 2.0 chapter JSON output.
 - Feed transcript acquisition where feeds expose `podcast:transcript`.
-- Cost-gated provider hooks for OpenRouter audio transcription, OpenAI transcription, feed transcripts, and OpenRouter text classification.
+- Cost-gated provider hooks for OpenRouter audio transcription, OpenAI transcription, feed transcripts, and OpenAI-compatible text classification.
 - Model-only timed ad decisions. There are no keyword-derived cuts or keyword-derived audit signals.
 - One-time OpenRouter/Nano Banana stamped podcast artwork generation, preserving the upstream cover and adding an `AD-FREE` stamp.
 - ffmpeg render path for cutting removal segments, preserving source MP3 audio with stream-copy where possible, and inserting a short marker tone.
@@ -114,7 +114,7 @@ data/config/runtime-overrides.json
 
 They can adjust global or per-podcast confidence threshold, cut padding, minimum/maximum cut duration, and marker tone enablement for future processing and forced reprocesses.
 
-Cut padding is split into before/after controls. The default is conservative around starts: `prePaddingSeconds: 0` and `postPaddingSeconds: 0.4`, so uncertain boundaries leave a small ad remnant instead of chopping editorial audio before the detected ad.
+Cut padding is split into before/after controls. The default is destructive-edit conservative on both sides: `prePaddingSeconds: 0` and `postPaddingSeconds: 0`. Uncertain boundaries leave a short ad remnant instead of chopping editorial audio.
 
 ## Real Audio Processing
 
@@ -130,13 +130,13 @@ Removal requires timed model decisions against timestamped transcript chunks. Th
 
 RSS duration is not trusted for rendering. Dynamic ad insertion can make the actual downloaded MP3 longer than the feed's `itunes:duration`, so the renderer probes the source file and maps cuts against the real audio timeline.
 
-Qwen classifies timestamped transcript windows before audio is removed. Episode descriptions and publisher chapters are supplied as context, but the cut decision is model-only.
+The configured text LLM classifies timestamped transcript windows before audio is removed. Episode descriptions and publisher chapters are supplied as context, but the cut decision is model-only.
 
 Chapters are normalized before serving: at most 10 items, topic-only labels, normally 1-4 words, and generated prefixes like `Discussion:` are stripped.
 
-## OpenRouter
+## Model Providers
 
-`OPENROUTER_API_KEY` is detected in the environment. OpenRouter is used by default for both transcription and text classification/chaptering:
+OpenRouter is used by default for timestamped audio transcription and artwork stamping. Text classification/chaptering uses an OpenAI-compatible chat completions endpoint so deployment can point it at OpenCode Go, OpenRouter, or another compatible gateway:
 
 ```yaml
 transcripts:
@@ -148,10 +148,12 @@ transcripts:
       model: xiaomi/mimo-v2-omni
       chunkSeconds: 180
 llm:
-  provider: openrouter
+  provider: openai-compatible
   enabled: true
-  model: qwen/qwen3.6-flash
+  model: deepseek-v4-pro
 ```
+
+Set `TEXT_LLM_BASE_URL` to an OpenAI-compatible base URL such as `https://opencode.ai/zen/go/v1`, and set `TEXT_LLM_API_KEY` from private deployment secrets. The app appends `/chat/completions` unless the env var already includes it. Set `TEXT_LLM_PROVIDER_LABEL` if you want cost/manifest notes to show a friendly provider name. For legacy OpenRouter text calls, `llm.provider: openrouter` still works and can use `OPENROUTER_API_KEY`.
 
 OpenRouter is also used for podcast artwork stamping when enabled. The current image model is `google/gemini-3.1-flash-image-preview`, OpenRouter's Nano Banana 2 listing. It edits the upstream cover once, stores the result under the podcast data directory, then rewrites RSS `image`, `itunes:image`, and episode image metadata to the local stamped asset.
 
@@ -161,15 +163,29 @@ The text classifier is separate from transcription, so the pipeline is:
 
 1. Audio download.
 2. OpenRouter audio-chat transcription into timestamped utterance segments.
-3. Forced-alignment pass when `ELEVENLABS_API_KEY` is available, returning provider word timestamps and remapping transcript segment boundaries.
-4. Qwen text classification over timestamped transcript windows.
+3. Alignment, either full-episode local WhisperX or targeted ElevenLabs windows depending on `alignment.provider`.
+4. OpenAI-compatible text classification over timestamped transcript windows.
 5. Model-returned absolute source timestamps mapped back to transcript segments.
 6. Cut windows snapped to forced-aligned word timestamps when available.
 7. ffmpeg cuts and marker-tone insertion.
 
-The default alignment mode is `auto`. With `ELEVENLABS_API_KEY` set, it calls ElevenLabs `/v1/forced-alignment`; without that key, it falls back to `segment-boundary-v1` so processing does not hard-fail. Set `alignment.requireProvider: true` if missing forced alignment should fail the episode instead of falling back.
+The default alignment mode is `auto`, which requires local WhisperX alignment to succeed. There is no silent downgrade to segment-boundary cuts, because those cuts are too coarse for destructive ad removal. If WhisperX is missing, source audio is unavailable, or alignment fails, the episode fails and stays out of RSS until the runtime is fixed and the job is retried.
 
-ElevenLabs forced alignment is extra hosted work. The app accounts for it with `alignment.estimatedCostPerMinuteUsd`, defaulting to `$0.003667/min`, equivalent to `$0.22/hour`, the published ElevenLabs Scribe STT API price at the time this was added. The forced-alignment API response does not include exact per-request spend, so this is recorded as an estimate.
+Before rendering, Podcastoor runs a content-loss guard over every removal window. If a model boundary lands inside a transcript segment without an exact anchor phrase that can be matched to forced-aligned words, the cut is moved inward to the nearest transcript boundary or downgraded to mark-only. The bias is deliberate: keep questionable audio instead of deleting real show content.
+
+WhisperX alignment runs locally and records no hosted API cost. It does use local CPU/GPU time and model cache storage. ElevenLabs is available only when explicitly configured. Use `alignment.provider: elevenlabs-forced` for full-episode hosted alignment, or `alignment.provider: elevenlabs-targeted` for the hybrid path: Mimo transcribes the whole episode, the text model finds candidate ad windows, then ElevenLabs aligns only those candidate clips plus context. For hosted paths, set `alignment.estimatedCostPerMinuteUsd` so the ledger can estimate provider spend.
+
+Targeted ElevenLabs alignment requires `ELEVENLABS_API_KEY` and supports these knobs:
+
+```yaml
+alignment:
+  provider: elevenlabs-targeted
+  model: elevenlabs-forced-alignment
+  estimatedCostPerMinuteUsd: 0.003667
+  targetContextSeconds: 30
+  targetMaxWindows: 12
+  targetMaxClipSeconds: 360
+```
 
 ## Transcription Providers
 
@@ -180,20 +196,20 @@ The provider order is:
 3. Experimental Pocket Casts endpoint template, disabled because there is no public Pocket Casts API
 4. OpenAI transcription, disabled by default
 
-OpenRouter and OpenAI providers need a downloaded source file, so they only run outside dry-run mode.
+OpenRouter and OpenAI providers need a downloaded source file, so they only run outside dry-run mode. ElevenLabs is deliberately not a transcript provider; it can only run as a targeted alignment stage after the normal transcript/model pipeline has produced candidate ad windows.
 
 ## Methodology Choice
 
 The current best path with the available key is:
 
 - OpenRouter `xiaomi/mimo-v2-omni` audio chat: best current OpenRouter-only default in the bounded bake-off, tying the best phrase accuracy at lower observed cost while returning usable timestamped JSON segments.
-- Qwen 3.6 Flash on OpenRouter: text-only classifier over timestamped transcript windows, with exact request cost recorded from OpenRouter usage when available.
+- WhisperX local forced alignment: refines the transcript against the waveform and produces word-level timestamps used for final cut boundaries without adding API cost.
+- ElevenLabs targeted alignment: optional hosted precision layer that aligns only candidate ad windows after model detection, keeping hosted cost proportional to suspected ad audio rather than episode length.
+- OpenAI-compatible text endpoint: text-only classifier over timestamped transcript windows. The deployment can point this at OpenCode Go for subscription-backed calls or OpenRouter for usage-billed calls.
 - Nano Banana 2 on OpenRouter: one-off cover-art editing only, not transcription or classification.
 - ffmpeg: cuts timestamped windows with an accurate one-pass filter render, then encodes once at at least the configured/source bitrate and inserts the marker tone.
 
 OpenRouter's dedicated STT endpoint currently returns text plus usage rather than native word timestamps, so the app uses OpenRouter audio-chat transcription by default and asks the audio model for strict timestamped JSON segments. Those timestamps are still model-generated, not forced-alignment timestamps. OpenRouter chat responses include `usage.cost`; the app records that exact model-call cost when present and only falls back to token-price estimates for preflight budgeting.
-
-Timestamp precision notes and the forced-alignment path are tracked in [`docs/timestamp-precision.md`](docs/timestamp-precision.md).
 
 ## Data Layout
 

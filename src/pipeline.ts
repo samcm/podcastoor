@@ -1,1 +1,1 @@
-export const PIPELINE_VERSION = "v16-forced-alignment";
+export const PIPELINE_VERSION = "v25-aligned-boundary-review";

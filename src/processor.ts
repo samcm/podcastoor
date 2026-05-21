@@ -11,11 +11,21 @@ import { buildChapters, fetchPodcastIndexChapters, normalizeChapters, writeChapt
 import { durationAfterEdits, normalizeSegments, remapChapters, removalSegments } from "./timeline.js";
 import { renderEpisodeAudio, downloadAudio } from "./audio.js";
 import { assertBudget, estimateAlignmentCost, estimateEpisodeCost, recordCost } from "./costs.js";
-import { classifyTranscriptWithOpenRouter, generateChaptersWithOpenRouter } from "./openrouter.js";
+import { classifyTranscriptWithTextLlm, generateChaptersWithTextLlm, reviewAlignedCutBoundariesWithTextLlm } from "./openrouter.js";
 import { appendActivity } from "./activity.js";
 import { PIPELINE_VERSION } from "./pipeline.js";
 import { ensurePodcastArtwork } from "./artwork.js";
-import { alignmentWillUseHostedProvider, alignTranscript, refineDecisionsWithAlignedWords } from "./alignment.js";
+import {
+  type AlignmentResult,
+  alignmentNeedsSourceAudio,
+  alignmentUsesTargetedProvider,
+  alignTranscript,
+  alignTargetedDecisionWindows,
+  expandDecisionsAcrossNonSpeechTransitions,
+  extendEndingAdDecisions,
+  guardDecisionsAgainstContentLoss,
+  refineDecisionsWithAlignedWords
+} from "./alignment.js";
 import {
   isFatalProviderError,
   claimManualReprocessRequests,
@@ -101,8 +111,9 @@ async function processPodcast(
   const retryEpisodeKeys = manualPlan.failedOnly ? queueEntriesForManualRetry(queueEpisodes, podcast.slug) : new Set<string>();
   const lookbackDays = manualPlan.lookbackDaysFor(podcast.slug, podcast.processing.lookbackDays);
   const maxEpisodes = manualPlan.maxEpisodesFor(podcast.slug, options.maxEpisodes ?? podcast.processing.maxEpisodesPerRun);
-  const eligible = feed.episodes
-    .filter((episode) => isRecent(episode.pubDate, lookbackDays) || manualEpisodeKeys.has(episode.key) || retryEpisodeKeys.has(episode.key))
+  const discoveredEpisodes = options.episodeKey ? feed.episodes.filter((episode) => episode.key === options.episodeKey) : feed.episodes;
+  const eligible = discoveredEpisodes
+    .filter((episode) => options.episodeKey === episode.key || isRecent(episode.pubDate, lookbackDays) || manualEpisodeKeys.has(episode.key) || retryEpisodeKeys.has(episode.key))
     .slice(0, maxEpisodes);
   logger.info({ podcast: podcast.slug, feedTitle: feed.title, discovered: feed.episodes.length, eligible: eligible.length }, "feed parsed");
   await recordActivity(config, {
@@ -261,7 +272,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   let sourceAudioPath: string | undefined;
   const needsAudioForTranscript =
     !dryRun && (podcast.transcripts.providers.openRouter.enabled || podcast.transcripts.providers.openai.enabled) && Boolean(episode.enclosure?.url);
-  const needsAudioForAlignment = !dryRun && alignmentWillUseHostedProvider(config.alignment) && Boolean(episode.enclosure?.url);
+  const needsAudioForAlignment = !dryRun && alignmentNeedsSourceAudio(config.alignment) && Boolean(episode.enclosure?.url);
   if ((needsAudioForTranscript || needsAudioForAlignment) && episode.enclosure?.url) {
     await markQueueStage(config, podcast, episode, "downloading audio");
     const preflightTranscriptCost = estimateEpisodeCost(podcast, undefined, episode.durationSeconds);
@@ -284,18 +295,27 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     options.reuseTranscript !== false && !options.fullReprocess && (!existing || existing.sourceFingerprint === episode.sourceFingerprint)
       ? await readJson<Transcript>(paths.transcriptJson)
       : undefined;
-  const reusableTranscript = isTranscriptReusable(podcast, reusableTranscriptCandidate) ? reusableTranscriptCandidate : undefined;
+  const reusableTranscript = isTranscriptReusable(podcast, reusableTranscriptCandidate, config.alignment.provider) ? reusableTranscriptCandidate : undefined;
   await markQueueStage(config, podcast, episode, reusableTranscript ? "reusing transcript" : "acquiring transcript");
   const transcript =
     reusableTranscript?.text || reusableTranscript?.segments.length
       ? reusableTranscript
       : await acquireTranscript(config, podcast, episode, { sourceAudioPath, dryRun });
   const alignmentAudioPath = sourceAudioPath ?? ((await pathExists(paths.sourceAudio)) ? paths.sourceAudio : undefined);
-  const alignment = await alignTranscript(config.alignment, transcript, {
-    sourceAudioPath: alignmentAudioPath,
-    durationSeconds: episode.durationSeconds
-  });
-  const alignedTranscript = alignment.transcript;
+  const targetedAlignment = alignmentUsesTargetedProvider(config.alignment);
+  let alignment: AlignmentResult;
+  if (targetedAlignment) {
+    if (!transcript || transcript.segments.length === 0) {
+      throw new Error("ElevenLabs targeted alignment requires a non-empty transcript");
+    }
+    alignment = { transcript };
+  } else {
+    alignment = await alignTranscript(config.alignment, transcript, {
+      sourceAudioPath: alignmentAudioPath,
+      durationSeconds: episode.durationSeconds
+    });
+  }
+  let alignedTranscript = alignment.transcript;
   logger.info(
     {
       podcast: podcast.slug,
@@ -338,6 +358,8 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
       }
     });
   }
+  await markQueueStage(config, podcast, episode, "writing transcript");
+  let transcriptPath = alignedTranscript ? await writeTranscriptArtifacts(config, podcast.slug, episode.key, alignedTranscript) : undefined;
   const detection = detectAdSegments(episode, alignedTranscript, podcast.detection);
   let modelChapters: Chapter[] = [];
   const llmUsage: LlmUsage[] = [];
@@ -357,7 +379,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
         }
       });
       await markQueueStage(config, podcast, episode, "model detection");
-      const modelDetection = await classifyTranscriptWithOpenRouter(podcast, episode, alignedTranscript);
+      const modelDetection = await classifyTranscriptWithTextLlm(podcast, episode, alignedTranscript);
       detection.decisions.push(...modelDetection.decisions);
       detection.untimedSignals.push(...modelDetection.untimedSignals);
       detection.modelNotes = [...(detection.modelNotes ?? []), ...(modelDetection.modelNotes ?? [])];
@@ -378,8 +400,8 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
         }
       });
     } catch (error) {
-      detection.modelNotes = [...(detection.modelNotes ?? []), `OpenRouter detection failed without model substitution: ${String(error)}`];
-      logger.warn({ podcast: podcast.slug, episode: episode.title, err: error }, "OpenRouter detection failed without model substitution");
+      detection.modelNotes = [...(detection.modelNotes ?? []), `Text LLM detection failed without model substitution: ${String(error)}`];
+      logger.warn({ podcast: podcast.slug, episode: episode.title, err: error }, "Text LLM detection failed without model substitution");
       await recordActivity(config, {
         level: "warn",
         scope: "worker",
@@ -392,10 +414,79 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
       throw error;
     }
   }
+  if (targetedAlignment) {
+    await markQueueStage(config, podcast, episode, "targeted alignment");
+    alignment = await alignTargetedDecisionWindows(config.alignment, alignedTranscript, detection.decisions, {
+      sourceAudioPath: alignmentAudioPath,
+      durationSeconds: episode.durationSeconds,
+      confidenceThreshold: 0
+    });
+    alignedTranscript = alignment.transcript;
+    if (alignment.metadata) {
+      detection.modelNotes = [
+        ...(detection.modelNotes ?? []),
+        `Aligned ${alignment.metadata.wordCount ?? 0} words in candidate ad windows with ${alignment.metadata.provider}.`
+      ];
+      await recordActivity(config, {
+        level: "info",
+        scope: "worker",
+        podcastSlug: podcast.slug,
+        episodeKey: episode.key,
+        episodeTitle: episode.title,
+        message: "Targeted alignment complete",
+        details: {
+          provider: alignment.metadata.provider,
+          model: alignment.metadata.model,
+          wordCount: alignment.metadata.wordCount,
+          seconds: alignment.metadata.seconds,
+          costUsd: alignment.metadata.costUsd
+        }
+      });
+      transcriptPath = await writeTranscriptArtifacts(config, podcast.slug, episode.key, alignedTranscript);
+    }
+  }
   const refined = refineDecisionsWithAlignedWords(detection.decisions, alignedTranscript);
   detection.decisions = dedupeSegmentDecisions(refined.decisions);
   if (refined.adjustedDecisions > 0) {
     detection.modelNotes = [...(detection.modelNotes ?? []), `Refined ${refined.adjustedDecisions} ad decision boundaries with forced word timestamps.`];
+  }
+  const expanded = expandDecisionsAcrossNonSpeechTransitions(detection.decisions, alignedTranscript);
+  detection.decisions = dedupeSegmentDecisions(expanded.decisions);
+  if (expanded.expandedDecisions > 0) {
+    detection.modelNotes = [...(detection.modelNotes ?? []), `Expanded ${expanded.expandedDecisions} ad decision boundaries across adjacent non-speech transition audio.`];
+  }
+  if (alignedTranscript.words?.length && podcast.llm.enabled) {
+    await markQueueStage(config, podcast, episode, "boundary review");
+    const boundaryReview = await reviewAlignedCutBoundariesWithTextLlm(podcast, episode, alignedTranscript, detection.decisions);
+    detection.decisions = dedupeSegmentDecisions(boundaryReview.decisions);
+    llmUsage.push(...boundaryReview.llmUsage);
+    detection.modelNotes = [...(detection.modelNotes ?? []), ...boundaryReview.notes];
+    await recordActivity(config, {
+      level: "info",
+      scope: "worker",
+      podcastSlug: podcast.slug,
+      episodeKey: episode.key,
+      episodeTitle: episode.title,
+      message: "Aligned boundary review complete",
+      details: {
+        decisions: detection.decisions.length,
+        calls: boundaryReview.llmUsage.length,
+        model: podcast.llm.model
+      }
+    });
+  }
+  const guarded = guardDecisionsAgainstContentLoss(detection.decisions, alignedTranscript);
+  detection.decisions = dedupeSegmentDecisions(guarded.decisions);
+  if (guarded.guardedBoundaries > 0 || guarded.downgradedDecisions > 0) {
+    detection.modelNotes = [
+      ...(detection.modelNotes ?? []),
+      `Protected content by moving ${guarded.guardedBoundaries} unsafe cut boundaries inward and downgrading ${guarded.downgradedDecisions} unsafe cuts.`
+    ];
+  }
+  const endingExtended = extendEndingAdDecisions(detection.decisions, alignedTranscript);
+  detection.decisions = dedupeSegmentDecisions(endingExtended.decisions);
+  if (endingExtended.extendedDecisions > 0) {
+    detection.modelNotes = [...(detection.modelNotes ?? []), `Extended ${endingExtended.extendedDecisions} approved ending ad cuts to the final transcript boundary after alignment.`];
   }
   await markQueueStage(config, podcast, episode, "estimating cost");
   const textCost = estimateEpisodeCost(podcast, alignedTranscript, episode.durationSeconds);
@@ -404,7 +495,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
       ? {
           estimatedUsd: alignment.metadata.costUsd,
           notes: [
-            `ElevenLabs alignment estimate: ${((alignment.metadata.seconds ?? episode.durationSeconds ?? 0) / 60).toFixed(1)} min x $${config.alignment.estimatedCostPerMinuteUsd}/min on ${alignment.metadata.model}`
+            `${alignment.metadata.provider} alignment estimate: ${((alignment.metadata.seconds ?? episode.durationSeconds ?? 0) / 60).toFixed(1)} min x $${config.alignment.estimatedCostPerMinuteUsd}/min on ${alignment.metadata.model}`
           ]
         }
       : estimateAlignmentCost(config.alignment, episode.durationSeconds);
@@ -442,8 +533,6 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   const chapters = normalizeChapters(remapChapters(baseChapters, removed, jingleDuration));
   const processedDuration = durationAfterEdits(episode.durationSeconds, removed, jingleDuration);
 
-  await markQueueStage(config, podcast, episode, "writing transcript");
-  const transcriptPath = alignedTranscript ? await writeTranscriptArtifacts(config, podcast.slug, episode.key, alignedTranscript) : undefined;
   await markQueueStage(config, podcast, episode, "rendering audio");
   const audio = await renderEpisodeAudio({
     config: { ...config, audio: podcast.audio },
@@ -473,11 +562,11 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   const actualUsd = Number(((alignedTranscript.usage?.costUsd ?? 0) + alignmentActualUsd + llmUsage.reduce((sum, usage) => sum + (usage.costUsd ?? 0), 0)).toFixed(6));
   const actualNotes = llmUsage
     .filter((usage) => usage.costUsd != null)
-    .map((usage) => `OpenRouter ${usage.purpose} actual: ${usage.promptTokens ?? "?"} input tokens + ${usage.completionTokens ?? "?"} output tokens on ${usage.model} = $${usage.costUsd!.toFixed(6)}`);
+    .map((usage) => `${llmProviderLabel(usage.provider)} ${usage.purpose} actual: ${usage.promptTokens ?? "?"} input tokens + ${usage.completionTokens ?? "?"} output tokens on ${usage.model} = $${usage.costUsd!.toFixed(6)}`);
   const alignmentActualNotes =
     alignment.metadata?.costUsd != null
       ? [
-          `ElevenLabs alignment actual: ${((alignment.metadata.seconds ?? episode.durationSeconds ?? 0) / 60).toFixed(1)} min on ${alignment.metadata.model} = $${alignment.metadata.costUsd.toFixed(6)}`
+          `${alignment.metadata.provider} alignment actual: ${((alignment.metadata.seconds ?? episode.durationSeconds ?? 0) / 60).toFixed(1)} min on ${alignment.metadata.model} = $${alignment.metadata.costUsd.toFixed(6)}`
         ]
       : [];
 
@@ -496,6 +585,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     originalDurationSeconds: episode.durationSeconds,
     processedDurationSeconds: audio.durationSeconds ?? processedDuration,
     decisions: detection.decisions,
+    renderedCuts: removed,
     untimedSignals: detection.untimedSignals,
     modelNotes: detection.modelNotes,
     sourceChapters: normalizeChapters(episode.chapters),
@@ -562,6 +652,10 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
   return true;
 }
 
+function llmProviderLabel(provider: LlmUsage["provider"]): string {
+  return provider === "openai-compatible" ? "OpenAI-compatible LLM" : "OpenRouter";
+}
+
 function processingSignature(config: AppConfig, podcast: EffectivePodcastConfig, targetStatus: "completed" | "dry-run"): string {
   const payload = {
     pipelineVersion: PIPELINE_VERSION,
@@ -584,15 +678,17 @@ function processingSignature(config: AppConfig, podcast: EffectivePodcastConfig,
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
-function isTranscriptReusable(podcast: EffectivePodcastConfig, transcript: Transcript | null | undefined): transcript is Transcript {
+function isTranscriptReusable(podcast: EffectivePodcastConfig, transcript: Transcript | null | undefined, alignmentProvider?: string): transcript is Transcript {
   if (!transcript || (!transcript.text && transcript.segments.length === 0)) return false;
-  if (transcript.source.startsWith("openrouter-stt:") || transcript.source.startsWith("openrouter-audio-chat:")) {
+  if (alignmentProvider === "elevenlabs-targeted" && transcript.source.includes("+alignment:elevenlabs-targeted")) return false;
+  const transcriptSource = transcript.source.replace(/\+alignment:[^+]+/g, "");
+  if (transcriptSource.startsWith("openrouter-stt:") || transcriptSource.startsWith("openrouter-audio-chat:")) {
     const mode = podcast.transcripts.providers.openRouter.mode ?? "stt";
     const expectedSource = `${mode === "audioChat" ? "openrouter-audio-chat" : "openrouter-stt"}:${podcast.transcripts.providers.openRouter.model}`;
-    return podcast.transcripts.providers.openRouter.enabled && transcript.source === expectedSource;
+    return podcast.transcripts.providers.openRouter.enabled && transcriptSource === expectedSource;
   }
-  if (transcript.source.startsWith("openai:")) {
-    return podcast.transcripts.providers.openai.enabled && transcript.source === `openai:${podcast.transcripts.providers.openai.model}`;
+  if (transcriptSource.startsWith("openai:")) {
+    return podcast.transcripts.providers.openai.enabled && transcriptSource === `openai:${podcast.transcripts.providers.openai.model}`;
   }
   if (transcript.usage?.provider === "openrouter") {
     return podcast.transcripts.providers.openRouter.enabled && transcript.usage.model === podcast.transcripts.providers.openRouter.model;
@@ -606,14 +702,14 @@ function isTranscriptReusable(podcast: EffectivePodcastConfig, transcript: Trans
 }
 
 async function buildEpisodeChapters(podcast: EffectivePodcastConfig, episode: ParsedEpisode, transcript: Transcript | undefined): Promise<{ chapters: Chapter[]; llmUsage: LlmUsage[] }> {
-  const existing = buildChapters(episode, transcript, podcast.categories);
-  if (existing.length > 0 || !podcast.llm.enabled || !transcript) return { chapters: existing, llmUsage: [] };
+  const fallback = buildChapters(episode, transcript, podcast.categories);
+  if (!podcast.llm.enabled || !transcript) return { chapters: fallback, llmUsage: [] };
   try {
-    const generated = await generateChaptersWithOpenRouter(podcast, transcript);
-    return { chapters: generated.chapters.length > 0 ? generated.chapters : existing, llmUsage: generated.usage ? [generated.usage] : [] };
+    const generated = await generateChaptersWithTextLlm(podcast, transcript);
+    return { chapters: generated.chapters.length > 0 ? generated.chapters : fallback, llmUsage: generated.usage ? [generated.usage] : [] };
   } catch (error) {
-    logger.warn({ podcast: podcast.slug, episode: episode.title, err: error }, "OpenRouter chapter generation failed");
-    return { chapters: existing, llmUsage: [] };
+    logger.warn({ podcast: podcast.slug, episode: episode.title, err: error }, "Text LLM chapter generation failed");
+    return { chapters: fallback, llmUsage: [] };
   }
 }
 
