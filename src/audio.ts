@@ -9,7 +9,7 @@ import path from "node:path";
 import type { AppConfig, AudioRenderResult, DetectionConfig, SegmentDecision } from "./types.js";
 import { ensureDir, pathExists } from "./utils.js";
 import { episodePaths, fileBytes } from "./storage.js";
-import { keepSegments, normalizeSegments, removalSegments } from "./timeline.js";
+import { keepSegments, normalizeSegments, removalSegments, type Segment } from "./timeline.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -58,28 +58,34 @@ export async function renderEpisodeAudio(params: {
   downloadAudio: boolean;
   confidenceThreshold: number;
   detection: DetectionConfig;
+  renderedCuts?: Segment[];
 }): Promise<AudioRenderResult> {
   const paths = episodePaths(params.config, params.podcastSlug, params.episodeKey);
   const rawRemoved = removalSegments(params.decisions, params.confidenceThreshold);
 
   if (params.dryRun || !params.downloadAudio) {
-    const removed = normalizeSegments(rawRemoved, {
-      durationSeconds: params.originalDurationSeconds,
-      paddingSeconds: params.detection.paddingSeconds,
-      prePaddingSeconds: params.detection.prePaddingSeconds,
-      postPaddingSeconds: params.detection.postPaddingSeconds,
-      minSegmentSeconds: params.detection.minSegmentSeconds,
-      maxSegmentSeconds: params.detection.maxSegmentSeconds
-    });
+    const sourceDuration = params.originalDurationSeconds;
+    const removed = params.renderedCuts
+      ? normalizeSegments(params.renderedCuts, { durationSeconds: sourceDuration })
+      : normalizeSegments(rawRemoved, {
+          durationSeconds: sourceDuration,
+          paddingSeconds: params.detection.paddingSeconds,
+          prePaddingSeconds: params.detection.prePaddingSeconds,
+          postPaddingSeconds: params.detection.postPaddingSeconds,
+          minSegmentSeconds: params.detection.minSegmentSeconds,
+          maxSegmentSeconds: params.detection.maxSegmentSeconds
+        });
     const removedSeconds = removed.reduce((total, segment) => total + segment.end - segment.start, 0);
+    const dryRunKeeps = sourceDuration == null ? [] : keepSegments(sourceDuration, removed);
+    const jingleInsertedCount = params.config.audio.jingle.enabled ? Math.max(0, dryRunKeeps.length - 1) : 0;
     return {
       status: "dry-run",
       removedSeconds,
       renderedCuts: removed,
-      jingleInsertedCount: params.config.audio.jingle.enabled ? removed.length : 0,
-      jingleDurationSeconds: params.config.audio.jingle.enabled ? params.config.audio.jingle.durationSeconds : 0,
-      sourceDurationSeconds: params.originalDurationSeconds,
-      durationSeconds: params.originalDurationSeconds,
+      jingleInsertedCount,
+      jingleDurationSeconds: jingleInsertedCount > 0 ? params.config.audio.jingle.durationSeconds : 0,
+      sourceDurationSeconds: sourceDuration,
+      durationSeconds: sourceDuration,
       renderMode: "dry-run"
     };
   }
@@ -91,14 +97,16 @@ export async function renderEpisodeAudio(params: {
   await downloadAudio(params.sourceUrl, paths.sourceAudio);
   const sourceInfo = await probeAudioInfo(paths.sourceAudio, params.originalDurationSeconds);
   const sourceDuration = sourceInfo.durationSeconds;
-  const removed = normalizeSegments(rawRemoved, {
-    durationSeconds: sourceDuration,
-    paddingSeconds: params.detection.paddingSeconds,
-    prePaddingSeconds: params.detection.prePaddingSeconds,
-    postPaddingSeconds: params.detection.postPaddingSeconds,
-    minSegmentSeconds: params.detection.minSegmentSeconds,
-    maxSegmentSeconds: params.detection.maxSegmentSeconds
-  });
+  const removed = params.renderedCuts
+    ? normalizeSegments(params.renderedCuts, { durationSeconds: sourceDuration })
+    : normalizeSegments(rawRemoved, {
+        durationSeconds: sourceDuration,
+        paddingSeconds: params.detection.paddingSeconds,
+        prePaddingSeconds: params.detection.prePaddingSeconds,
+        postPaddingSeconds: params.detection.postPaddingSeconds,
+        minSegmentSeconds: params.detection.minSegmentSeconds,
+        maxSegmentSeconds: params.detection.maxSegmentSeconds
+      });
   const removedSeconds = removed.reduce((total, segment) => total + segment.end - segment.start, 0);
   if (removed.length === 0) {
     await copyFile(paths.sourceAudio, paths.processedAudio);

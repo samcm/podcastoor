@@ -1,4 +1,4 @@
-import type { Chapter, SegmentDecision } from "./types.js";
+import type { Chapter, SegmentDecision, TranscriptSegment } from "./types.js";
 
 export interface Segment {
   start: number;
@@ -50,38 +50,71 @@ export function normalizeSegments(
   return merged;
 }
 
+export function snapOpeningCutToContent(
+  segments: Segment[],
+  transcriptSegments: TranscriptSegment[],
+  options: { durationSeconds?: number; openingSnapSeconds?: number; maxGapSeconds?: number } = {}
+): Segment[] {
+  if (segments.length === 0) return [];
+  const openingSnapSeconds = options.openingSnapSeconds ?? 1;
+  const maxGapSeconds = options.maxGapSeconds ?? 5;
+  const out = segments.map((segment) => ({ ...segment }));
+  const first = out[0];
+
+  if (first.start <= openingSnapSeconds) {
+    first.start = 0;
+    const firstPostAdSpeech = transcriptSegments.find((segment) => segment.start >= first.end - 0.05);
+    if (firstPostAdSpeech) {
+      const gapSeconds = firstPostAdSpeech.start - first.end;
+      if (gapSeconds >= -0.05 && gapSeconds <= maxGapSeconds) {
+        first.end = Math.max(first.end, firstPostAdSpeech.start);
+      }
+    }
+  }
+
+  return normalizeSegments(out, { durationSeconds: options.durationSeconds });
+}
+
 export function durationAfterEdits(durationSeconds: number | undefined, removed: Segment[], jingleDurationSeconds: number): number | undefined {
   if (durationSeconds == null) return undefined;
   const removedSeconds = removed.reduce((total, segment) => total + Math.max(0, segment.end - segment.start), 0);
-  return Math.max(0, durationSeconds - removedSeconds + removed.length * jingleDurationSeconds);
+  const markerSeconds = removed.reduce((total, segment) => total + markerDurationForCut(segment, jingleDurationSeconds, durationSeconds), 0);
+  return Math.max(0, durationSeconds - removedSeconds + markerSeconds);
 }
 
-export function mapOriginalToProcessed(timeSeconds: number, removed: Segment[], jingleDurationSeconds: number): number {
+export function mapOriginalToProcessed(timeSeconds: number, removed: Segment[], jingleDurationSeconds: number, sourceDurationSeconds?: number): number {
   let mapped = Math.max(0, timeSeconds);
   for (const segment of removed) {
     if (timeSeconds < segment.start) break;
     const removedLength = segment.end - segment.start;
+    const markerDuration = markerDurationForCut(segment, jingleDurationSeconds, sourceDurationSeconds);
     if (timeSeconds <= segment.end) {
-      return Math.max(0, segment.start - removedBefore(segment.start, removed, jingleDurationSeconds));
+      return Math.max(0, segment.start - removedBefore(segment.start, removed, jingleDurationSeconds, sourceDurationSeconds));
     }
     mapped -= removedLength;
-    mapped += jingleDurationSeconds;
+    mapped += markerDuration;
   }
   return Math.max(0, mapped);
 }
 
-function removedBefore(timeSeconds: number, removed: Segment[], jingleDurationSeconds: number): number {
-  return removed
-    .filter((segment) => segment.end <= timeSeconds)
-    .reduce((total, segment) => total + (segment.end - segment.start) - jingleDurationSeconds, 0);
+function markerDurationForCut(segment: Segment, jingleDurationSeconds: number, sourceDurationSeconds?: number): number {
+  if (jingleDurationSeconds <= 0) return 0;
+  if (sourceDurationSeconds != null && (segment.start <= 0.05 || segment.end >= sourceDurationSeconds - 0.05)) return 0;
+  return jingleDurationSeconds;
 }
 
-export function remapChapters(chapters: Chapter[], removed: Segment[], jingleDurationSeconds: number): Chapter[] {
+function removedBefore(timeSeconds: number, removed: Segment[], jingleDurationSeconds: number, sourceDurationSeconds?: number): number {
+  return removed
+    .filter((segment) => segment.end <= timeSeconds)
+    .reduce((total, segment) => total + (segment.end - segment.start) - markerDurationForCut(segment, jingleDurationSeconds, sourceDurationSeconds), 0);
+}
+
+export function remapChapters(chapters: Chapter[], removed: Segment[], jingleDurationSeconds: number, sourceDurationSeconds?: number): Chapter[] {
   const remapped = chapters
     .filter((chapter) => !removed.some((segment) => chapter.startTime > segment.start && chapter.startTime < segment.end))
     .map((chapter) => ({
       ...chapter,
-      startTime: mapOriginalToProcessed(chapter.startTime, removed, jingleDurationSeconds)
+      startTime: mapOriginalToProcessed(chapter.startTime, removed, jingleDurationSeconds, sourceDurationSeconds)
     }))
     .sort((a, b) => a.startTime - b.startTime);
 

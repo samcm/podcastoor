@@ -8,7 +8,7 @@ import { ensureEpisodeDir, readManifest, writeManifest } from "./storage.js";
 import { acquireTranscript, writeTranscriptArtifacts } from "./transcripts.js";
 import { dedupeSegmentDecisions, detectAdSegments } from "./detectors.js";
 import { buildChapters, fetchPodcastIndexChapters, normalizeChapters, writeChapters } from "./chapters.js";
-import { durationAfterEdits, normalizeSegments, remapChapters, removalSegments } from "./timeline.js";
+import { durationAfterEdits, normalizeSegments, remapChapters, removalSegments, snapOpeningCutToContent } from "./timeline.js";
 import { renderEpisodeAudio, downloadAudio } from "./audio.js";
 import { assertBudget, estimateAlignmentCost, estimateEpisodeCost, recordCost } from "./costs.js";
 import { classifyTranscriptWithTextLlm, generateChaptersWithTextLlm, reviewAlignedCutBoundariesWithTextLlm } from "./openrouter.js";
@@ -521,7 +521,7 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     alignedTranscript.segments.at(-1)?.end ?? 0,
     ...detection.decisions.map((decision) => decision.end)
   );
-  const removed = normalizeSegments(removalSegments(detection.decisions, podcast.processing.confidenceThreshold), {
+  const normalizedRemoved = normalizeSegments(removalSegments(detection.decisions, podcast.processing.confidenceThreshold), {
     durationSeconds: timelineDuration || episode.durationSeconds,
     paddingSeconds: podcast.detection.paddingSeconds,
     prePaddingSeconds: podcast.detection.prePaddingSeconds,
@@ -529,9 +529,12 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     minSegmentSeconds: podcast.detection.minSegmentSeconds,
     maxSegmentSeconds: podcast.detection.maxSegmentSeconds
   });
+  const removed = snapOpeningCutToContent(normalizedRemoved, alignedTranscript.segments, {
+    durationSeconds: timelineDuration || episode.durationSeconds
+  });
   const jingleDuration = podcast.audio.jingle.enabled ? podcast.audio.jingle.durationSeconds : 0;
-  const chapters = normalizeChapters(remapChapters(baseChapters, removed, jingleDuration));
-  const processedDuration = durationAfterEdits(episode.durationSeconds, removed, jingleDuration);
+  const chapters = normalizeChapters(remapChapters(baseChapters, removed, jingleDuration, timelineDuration || episode.durationSeconds));
+  const processedDuration = durationAfterEdits(timelineDuration || episode.durationSeconds, removed, jingleDuration);
 
   await markQueueStage(config, podcast, episode, "rendering audio");
   const audio = await renderEpisodeAudio({
@@ -544,7 +547,8 @@ async function processEpisode(config: AppConfig, podcast: EffectivePodcastConfig
     dryRun,
     downloadAudio: downloadEnabled,
     confidenceThreshold: podcast.processing.confidenceThreshold,
-    detection: podcast.detection
+    detection: podcast.detection,
+    renderedCuts: removed
   });
   logger.info({ podcast: podcast.slug, episode: episode.title, audioStatus: audio.status, removedSeconds: audio.removedSeconds }, "audio render complete");
   await recordActivity(config, {

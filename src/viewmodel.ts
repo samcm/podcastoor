@@ -503,7 +503,7 @@ export async function buildEpisodeView(config: AppConfig, slug: string, episodeK
     i: index + 1,
     src0: seconds3(d.start),
     src1: seconds3(d.end),
-    proc: seconds3(mapOriginalToProcessed(d.start, removed, jingle)),
+    proc: seconds3(mapOriginalToProcessed(d.start, removed, jingle, durSource)),
     dur: Math.round(d.end - d.start),
     action: d.action === "remove" ? ("remove" as const) : ("mark" as const),
     conf: d.confidence,
@@ -522,8 +522,8 @@ export async function buildEpisodeView(config: AppConfig, slug: string, episodeK
     return {
       src: seconds3(segment.start),
       srcEnd: seconds3(segment.end),
-      proc: status === "removed" ? null : seconds3(mapOriginalToProcessed(segment.start, removed, jingle)),
-      procEnd: status === "removed" ? null : seconds3(mapOriginalToProcessed(segment.end, removed, jingle)),
+      proc: status === "removed" ? null : seconds3(mapOriginalToProcessed(segment.start, removed, jingle, durSource)),
+      procEnd: status === "removed" ? null : seconds3(mapOriginalToProcessed(segment.end, removed, jingle, durSource)),
       status,
       text: segment.text,
     };
