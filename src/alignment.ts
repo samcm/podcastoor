@@ -621,7 +621,8 @@ async function postElevenLabsForcedAlignment(
 ): Promise<{ words?: Array<{ text?: string; start?: number; end?: number; loss?: number }>; loss?: number }> {
   const audio = await readFile(sourceAudioPath);
   let lastError = "";
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  const maxAttempts = elevenLabsAlignmentMaxAttempts();
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const form = new FormData();
     form.set("file", new Blob([audio]), path.basename(sourceAudioPath));
     form.set("text", text);
@@ -640,12 +641,19 @@ async function postElevenLabsForcedAlignment(
       if (![408, 429, 500, 502, 503, 504].includes(response.status)) break;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
+      break;
     } finally {
       clearTimeout(timeout);
     }
     await delay(Math.min(30_000, 1500 * 2 ** attempt) + Math.floor(Math.random() * 500));
   }
   throw new Error(`ElevenLabs forced alignment failed after retries: ${lastError}`);
+}
+
+function elevenLabsAlignmentMaxAttempts(): number {
+  const configured = Number(process.env.ELEVENLABS_ALIGNMENT_MAX_ATTEMPTS);
+  if (Number.isFinite(configured) && configured >= 1) return Math.min(3, Math.floor(configured));
+  return 1;
 }
 
 async function extractAudioClip(sourceAudioPath: string, outputPath: string, startSeconds: number, durationSeconds: number): Promise<void> {
