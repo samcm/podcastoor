@@ -170,8 +170,8 @@ transcripts:
     openRouter:
       enabled: true
       mode: audioChat
-      model: xiaomi/mimo-v2-omni
-      chunkSeconds: 180
+      model: xiaomi/mimo-v2.5
+      chunkSeconds: 90
 llm:
   provider: openai-compatible
   enabled: true
@@ -227,7 +227,7 @@ OpenRouter and OpenAI providers need a downloaded source file, so they only run 
 
 The current best path with the available key is:
 
-- OpenRouter `xiaomi/mimo-v2-omni` audio chat: best current OpenRouter-only default in the bounded bake-off, tying the best phrase accuracy at lower observed cost while returning usable timestamped JSON segments.
+- OpenRouter `xiaomi/mimo-v2.5` audio chat: current OpenRouter-only default after the older `mimo-v2-omni` endpoint stopped serving requests. It provides the bulk transcript text cheaply; forced alignment supplies the final timestamps.
 - WhisperX local forced alignment: refines the transcript against the waveform and produces word-level timestamps used for final cut boundaries without adding API cost.
 - ElevenLabs targeted alignment: optional hosted precision layer that aligns only candidate ad windows after model detection, keeping hosted cost proportional to suspected ad audio rather than episode length.
 - OpenAI-compatible text endpoint: text-only classifier over timestamped transcript windows. The deployment can point this at OpenCode Go for subscription-backed calls or OpenRouter for usage-billed calls.

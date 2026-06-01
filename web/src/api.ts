@@ -30,7 +30,23 @@ export interface ActivityRow {
   episodeTitle: string;
   stage: string;
   message: string;
+  details?: string;
   outcome: "ok" | "info" | "warn" | "fail";
+}
+
+export interface QueueIssue {
+  id: string;
+  podcastSlug: string;
+  podcastTitle: string;
+  episodeKey: string;
+  episodeTitle: string;
+  state: QueueState;
+  stage: string;
+  attempts: number;
+  maxAttempts: number;
+  lastAttemptAt?: string;
+  lastError?: string;
+  updatedAt: string;
 }
 
 export interface DashboardView {
@@ -52,23 +68,39 @@ export interface DashboardView {
   cost: { today: number; todayBudget: number; daily: number[] };
   queueCounts: Record<string, number>;
   automation: { running: boolean; lastStartedAt?: string; lastFinishedAt?: string; lastError?: string };
+  ops: {
+    workerRunning: boolean;
+    lastActivityAt?: string;
+    lastStartedAt?: string;
+    lastFinishedAt?: string;
+    queued: number;
+    running: number;
+    failed: number;
+    quarantined: number;
+    waitingForCredits: number;
+    issues: QueueIssue[];
+  };
 }
 
 export type QueueState = "queued" | "running" | "completed" | "failed" | "skipped" | "quarantined" | "waiting-for-credits";
 
 export interface QueueRow {
   id: string;
+  episodeKey: string;
+  title: string;
   podcastSlug: string;
   podcastTitle: string;
   podcastColor: string;
   episodeTitle: string;
   state: QueueState;
   stage: string;
+  currentStage: string;
   attempts: number;
   maxAttempts: number;
   lastAttemptAt?: string;
   nextRetryAt?: string;
   lastError?: string;
+  updatedAt: string;
   model: string;
 }
 

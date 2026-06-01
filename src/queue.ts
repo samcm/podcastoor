@@ -83,7 +83,7 @@ export function queueEpisodeId(podcastSlug: string, episodeKey: string): string 
 }
 
 export async function readQueue(config: AppConfig): Promise<QueueState> {
-  return (
+  return normalizeQueueState(
     (await readJson<QueueState>(queuePath(config))) ?? {
       schemaVersion: 1,
       updatedAt: new Date().toISOString(),
@@ -186,6 +186,7 @@ export async function shouldProcessQueueEpisode(config: AppConfig, podcast: Effe
     return { process: false, reason: "waiting for credits" };
   }
   if (!force && entry.state === "quarantined") return { process: false, reason: "quarantined" };
+  if (!force && entry.state === "waiting-for-credits" && isFatalProviderError(entry.lastError ?? "")) return { process: false, reason: "waiting for credits" };
   if (!force && (entry.state === "failed" || entry.state === "waiting-for-credits") && entry.nextRetryAt && Date.parse(entry.nextRetryAt) > Date.now()) {
     return { process: false, reason: `retry after ${entry.nextRetryAt}` };
   }
@@ -244,17 +245,18 @@ export async function markQueueSkipped(config: AppConfig, podcast: EffectivePodc
 export async function markQueueFailure(config: AppConfig, podcast: EffectivePodcastConfig, episode: ParsedEpisode, error: unknown): Promise<QueueEpisodeState> {
   const errorText = String(error);
   const fatalProvider = isFatalProviderError(errorText);
+  const provider = providerForError(errorText);
   let nextState: QueueEpisodeState = fatalProvider ? "waiting-for-credits" : "failed";
   await updateQueueEpisode(config, podcast, episode, (entry, now) => {
-    if (entry.attempts >= Math.max(1, config.retry.maxAttempts)) nextState = "quarantined";
+    if (!fatalProvider && entry.attempts >= Math.max(1, config.retry.maxAttempts)) nextState = "quarantined";
     const nextRetryAt =
-      nextState === "failed" || nextState === "waiting-for-credits"
+      nextState === "failed"
         ? new Date(Date.now() + Math.max(1, config.retry.retryDelayMinutes) * 60_000).toISOString()
         : undefined;
     return {
       ...entry,
       state: nextState,
-      currentStage: nextState === "quarantined" ? "quarantined" : "failed",
+      currentStage: nextState === "quarantined" ? "quarantined" : nextState === "waiting-for-credits" ? "waiting-for-credits" : "failed",
       lastError: errorText,
       nextRetryAt,
       updatedAt: now,
@@ -263,7 +265,7 @@ export async function markQueueFailure(config: AppConfig, podcast: EffectivePodc
         state: nextState,
         stage: entry.currentStage || "failed",
         error: errorText,
-        provider: fatalProvider ? "openrouter" : undefined
+        provider: fatalProvider ? provider : undefined
       })
     };
   });
@@ -276,9 +278,9 @@ export async function markQueueWaitingForCredits(config: AppConfig, podcast: Eff
     state: "waiting-for-credits",
     currentStage: "waiting-for-credits",
     lastError: reason,
-    nextRetryAt: new Date(Date.now() + Math.max(1, config.retry.retryDelayMinutes) * 60_000).toISOString(),
+    nextRetryAt: undefined,
     updatedAt: now,
-    history: appendHistory(entry, { at: now, state: "waiting-for-credits", stage: "waiting-for-credits", error: reason, provider: "openrouter" })
+    history: appendHistory(entry, { at: now, state: "waiting-for-credits", stage: "waiting-for-credits", error: reason, provider: providerForError(reason) })
   }));
 }
 
@@ -365,7 +367,18 @@ export function queueEntriesForManualRetry(entries: QueueEpisode[], podcastSlug:
 }
 
 export function isFatalProviderError(errorText: string): boolean {
-  return /\b(401|402|403)\b/.test(errorText) || /insufficient credits|unauthorized|forbidden|payment required|requires more credits/i.test(errorText);
+  return (
+    /\b(401|402|403)\b/.test(errorText) ||
+    /insufficient credits|requires more credits|credits remaining|quota_exceeded|exceeds your quota|quota exceeded|unauthorized|forbidden|payment required/i.test(errorText)
+  );
+}
+
+function providerForError(errorText: string): string {
+  if (/elevenlabs/i.test(errorText)) return "elevenlabs";
+  if (/openrouter/i.test(errorText)) return "openrouter";
+  if (/opencode/i.test(errorText)) return "opencode";
+  if (/openai/i.test(errorText)) return "openai";
+  return "provider";
 }
 
 function needsModelProvider(podcast: EffectivePodcastConfig): boolean {
@@ -438,4 +451,15 @@ async function writeQueue(config: AppConfig, state: QueueState): Promise<void> {
 
 function queuePath(config: AppConfig): string {
   return path.join(config.storage.dataDir, "queue", "state.json");
+}
+
+function normalizeQueueState(state: QueueState): QueueState {
+  for (const entry of Object.values(state.episodes)) {
+    if (entry.state !== "quarantined") continue;
+    if (!isFatalProviderError(entry.lastError ?? "")) continue;
+    entry.state = "waiting-for-credits";
+    entry.currentStage = "waiting-for-credits";
+    entry.nextRetryAt = undefined;
+  }
+  return state;
 }

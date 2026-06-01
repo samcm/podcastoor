@@ -275,7 +275,7 @@ async function transcribeOpenRouterChunk(params: {
   let lastError = "";
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90_000);
+    const timeout = setTimeout(() => controller.abort(), openRouterTranscriptTimeoutMs());
     let response: Response;
     let body = "";
     try {
@@ -330,7 +330,7 @@ async function transcribeOpenRouterAudioChatChunk(params: {
   let lastError = "";
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90_000);
+    const timeout = setTimeout(() => controller.abort(), openRouterTranscriptTimeoutMs());
     let response: Response;
     let body = "";
     logTranscriptProgress("openrouter audio chat attempt started", {
@@ -482,6 +482,11 @@ function parseOpenRouterAudioChatSegments(content: string, durationSeconds: numb
     })
     .filter((segment) => segment.text && segment.end > segment.start)
     .sort((a, b) => a.start - b.start);
+}
+
+function openRouterTranscriptTimeoutMs(): number {
+  const value = Number(process.env.OPENROUTER_TRANSCRIPT_TIMEOUT_MS);
+  return Number.isFinite(value) && value >= 30_000 ? value : 240_000;
 }
 
 async function fetchOpenRouterGenerationCost(apiKey: string, generationId: string): Promise<number | undefined> {

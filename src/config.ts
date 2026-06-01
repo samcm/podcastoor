@@ -89,9 +89,9 @@ export const defaultConfig: AppConfig = {
       openRouter: {
         enabled: true,
         mode: "audioChat",
-        model: "xiaomi/mimo-v2-omni",
+        model: "xiaomi/mimo-v2.5",
         language: "en",
-        chunkSeconds: 180,
+        chunkSeconds: 90,
         concurrency: 1,
         estimatedCostPerMinuteUsd: 0.0013
       },

@@ -24,25 +24,23 @@ function retryLabel(row: QueueRow): string {
 function RowActions({ row, reload, isAdmin }: { row: QueueRow; reload: () => void; isAdmin: boolean }) {
   if (!isAdmin) return row.state === "failed" || row.state === "quarantined" ? <SBtn variant="ghost">⌗ logs</SBtn> : null;
   const slug = row.podcastSlug;
-  const ep = row.episodeTitle;
-  if (row.state === "failed")
+  const episodeKey = row.episodeKey;
+  const retryEpisode = () =>
+    runAdminAction(async () => {
+      await api.resetAttempts({ podcastSlug: slug, episodeKey, allQuarantined: false });
+      await api.reprocess({ scope: "episode", podcastSlug: slug, episodeKey, force: true, downloadAudio: true });
+    }, reload);
+  if (row.state === "failed" || row.state === "quarantined" || row.state === "waiting-for-credits")
     return (
       <>
-        <SBtn variant="ghost" onClick={() => runAdminAction(() => api.resetAttempts({ podcastSlug: slug }), reload)}>↻ retry</SBtn>{" "}
-        <SBtn variant="ghost">⌗ logs</SBtn>
-      </>
-    );
-  if (row.state === "quarantined")
-    return (
-      <>
-        <SBtn variant="ghost" onClick={() => runAdminAction(() => api.resetAttempts({ podcastSlug: slug, allQuarantined: true }), reload)}>⌂ reset</SBtn>{" "}
-        <SBtn variant="ghost">⌗ logs</SBtn>
+        <SBtn variant="ghost" onClick={retryEpisode}>↻ retry now</SBtn>{" "}
+        <SBtn variant="ghost" onClick={() => runAdminAction(() => api.resetAttempts({ podcastSlug: slug, episodeKey, allQuarantined: false }), reload)}>reset</SBtn>
       </>
     );
   if (row.state === "queued") return <SBtn variant="ghost">✕ cancel</SBtn>;
   if (row.state === "running") return <SBtn variant="ghost">⏹ stop</SBtn>;
   if (row.state === "completed")
-    return <SBtn variant="ghost" onClick={() => runAdminAction(() => api.reprocess({ scope: "episode", podcastSlug: slug, episodeKey: row.id.split(":").slice(1).join(":"), force: true }), reload)} title={ep}>↻</SBtn>;
+    return <SBtn variant="ghost" onClick={() => runAdminAction(() => api.reprocess({ scope: "episode", podcastSlug: slug, episodeKey, force: true, downloadAudio: true }), reload)} title={row.episodeTitle}>↻</SBtn>;
   return null;
 }
 
@@ -106,7 +104,7 @@ function QueueBody({ rows, mobile, reload }: { rows: QueueRow[]; mobile: boolean
                     <td style={{ padding: "8px 10px", color: S.textDim }}>{fmtHm(r.lastAttemptAt)}</td>
                     <td style={{ padding: "8px 10px", color: retryLabel(r) === "manual" ? S.red : retryLabel(r) === "—" ? S.textMute : S.textDim }}>{retryLabel(r)}</td>
                     <td style={{ padding: "8px 10px", color: S.textMute, fontSize: 10 }}>{r.model}</td>
-                    <td style={{ padding: "8px 10px", color: S.red, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.lastError || <span style={{ color: S.textMute }}>—</span>}</td>
+                    <td style={{ padding: "8px 10px", color: S.red, maxWidth: 360, whiteSpace: "normal", lineHeight: 1.35 }}>{r.lastError || <span style={{ color: S.textMute }}>—</span>}</td>
                     <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}><RowActions row={r} reload={reload} isAdmin={admin.isAdmin} /></td>
                   </tr>
                 );

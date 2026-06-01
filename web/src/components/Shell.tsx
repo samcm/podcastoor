@@ -81,7 +81,7 @@ function TopBar({ mobile }: { mobile: boolean }) {
               <SDot color={S.green} glow /> queue {stats?.queue ?? "—"}
             </span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-              <SDot color={S.amber} /> retry {stats?.retry ?? "—"}
+              <SDot color={S.amber} /> credits {stats?.retry ?? "—"}
             </span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
               <SDot color={S.red} /> fail {stats?.failed ?? "—"}
@@ -179,7 +179,6 @@ function Rail({ pathname }: { pathname: string }) {
       })}
       <div style={{ flex: 1 }} />
       <AdminButton />
-      <div style={{ ...sMono, fontSize: 9, color: S.textMute, writingMode: "vertical-rl", transform: "rotate(180deg)", marginBottom: 8 }}>host: studio-01</div>
     </div>
   );
 }

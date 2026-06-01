@@ -1,7 +1,7 @@
 import type { AppConfig, EpisodeManifest, Transcript } from "./types.js";
 import { listManifests, readLocalArtworkUrl } from "./library.js";
 import { episodePaths, readManifest } from "./storage.js";
-import { listQueueEpisodes, type QueueEpisodeState } from "./queue.js";
+import { listQueueEpisodes, type QueueEpisode, type QueueEpisodeState } from "./queue.js";
 import { summarizeCosts } from "./costs.js";
 import { readRecentActivity } from "./activity.js";
 import { loadRuntimeOverrides } from "./runtime-overrides.js";
@@ -62,7 +62,23 @@ export interface ActivityRow {
   episodeTitle: string;
   stage: string;
   message: string;
+  details?: string;
   outcome: "ok" | "info" | "warn" | "fail";
+}
+
+export interface QueueIssue {
+  id: string;
+  podcastSlug: string;
+  podcastTitle: string;
+  episodeKey: string;
+  episodeTitle: string;
+  state: QueueEpisodeState;
+  stage: string;
+  attempts: number;
+  maxAttempts: number;
+  lastAttemptAt?: string;
+  lastError?: string;
+  updatedAt: string;
 }
 
 export interface DashboardView {
@@ -84,21 +100,37 @@ export interface DashboardView {
   cost: { today: number; todayBudget: number; daily: number[] };
   queueCounts: Record<string, number>;
   automation: ReturnType<typeof getAutomationState>;
+  ops: {
+    workerRunning: boolean;
+    lastActivityAt?: string;
+    lastStartedAt?: string;
+    lastFinishedAt?: string;
+    queued: number;
+    running: number;
+    failed: number;
+    quarantined: number;
+    waitingForCredits: number;
+    issues: QueueIssue[];
+  };
 }
 
 export interface QueueRow {
   id: string;
+  episodeKey: string;
+  title: string;
   podcastSlug: string;
   podcastTitle: string;
   podcastColor: string;
   episodeTitle: string;
   state: QueueEpisodeState;
   stage: string;
+  currentStage: string;
   attempts: number;
   maxAttempts: number;
   lastAttemptAt?: string;
   nextRetryAt?: string;
   lastError?: string;
+  updatedAt: string;
   model: string;
 }
 
@@ -202,6 +234,36 @@ function clockTime(iso?: string): string {
   return Number.isNaN(d.getTime()) ? "—" : d.toISOString().slice(11, 19);
 }
 
+function activityDetailsText(details: Record<string, unknown>): string | undefined {
+  const parts: string[] = [];
+  const reason = typeof details.reason === "string" ? details.reason : undefined;
+  const error = typeof details.error === "string" ? details.error : undefined;
+  if (reason) parts.push(`reason: ${reason}`);
+  if (error) parts.push(error);
+  for (const key of ["processed", "skipped", "failed", "eligible", "discovered"]) {
+    const value = details[key];
+    if (typeof value === "number") parts.push(`${key}: ${value}`);
+  }
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
+function queueIssueFor(config: AppConfig, job: QueueEpisode): QueueIssue {
+  return {
+    id: job.id,
+    podcastSlug: job.podcastSlug,
+    podcastTitle: config.podcasts[job.podcastSlug]?.name ?? job.podcastSlug,
+    episodeKey: job.episodeKey,
+    episodeTitle: job.episodeTitle,
+    state: job.state,
+    stage: job.currentStage,
+    attempts: job.attempts,
+    maxAttempts: job.maxAttempts,
+    lastAttemptAt: job.lastAttemptAt,
+    lastError: job.lastError,
+    updatedAt: job.updatedAt,
+  };
+}
+
 function deriveStatus(failed: number, quarantined: number, running: boolean): PodcastStatus {
   if (running) return "run";
   if (failed > 0) return "fail";
@@ -240,8 +302,9 @@ async function buildPodcastCards(config: AppConfig): Promise<PodcastCard[]> {
     const queueForPodcast = queue.filter((q) => q.podcastSlug === slug);
     const running = queueForPodcast.some((q) => q.state === "running");
 
-    const derivedFailed = queueForPodcast.filter((q) => q.state === "failed" || q.state === "waiting-for-credits").length;
+    const derivedFailed = queueForPodcast.filter((q) => q.state === "failed").length;
     const derivedQuar = queueForPodcast.filter((q) => q.state === "quarantined").length;
+    const derivedWaiting = queueForPodcast.filter((q) => q.state === "waiting-for-credits").length;
     const completed = manifests.filter((m) => m.audio.status === "completed");
     const savedSeconds = completed.reduce((sum, m) => sum + savedSecondsForManifest(m), 0);
     const sourceSeconds = completed.reduce((sum, m) => sum + sourceSecondsForManifest(m), 0);
@@ -254,7 +317,7 @@ async function buildPodcastCards(config: AppConfig): Promise<PodcastCard[]> {
       host: meta.host ?? "—",
       color: colorFor(config, slug),
       artworkUrl: await readLocalArtworkUrl(config, slug),
-      status: demo?.status ?? deriveStatus(derivedFailed, derivedQuar, running),
+      status: demo?.status ?? deriveStatus(derivedFailed, derivedQuar + derivedWaiting, running),
       episodes: demo?.episodes ?? manifests.length,
       processed: demo?.processed ?? completed.length,
       failed: demo?.failed ?? derivedFailed,
@@ -292,6 +355,14 @@ export async function buildDashboard(config: AppConfig): Promise<DashboardView> 
 
   const queueCounts: Record<string, number> = {};
   for (const job of queue) queueCounts[job.state] = (queueCounts[job.state] ?? 0) + 1;
+  const queueByUpdated = [...queue].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  const issues = queueByUpdated
+    .filter((job) => job.state === "failed" || job.state === "quarantined" || job.state === "waiting-for-credits")
+    .slice(0, 8)
+    .map((job) => queueIssueFor(config, job));
+  const lastStartedAt = activityEvents.find((event) => event.message === "Processing run started")?.at;
+  const lastFinishedAt = activityEvents.find((event) => event.message === "Processing run finished")?.at;
+  const automation = getAutomationState();
 
   const activity: ActivityRow[] = activityEvents.map((event) => {
     const details = (event.details ?? {}) as Record<string, unknown>;
@@ -304,6 +375,7 @@ export async function buildDashboard(config: AppConfig): Promise<DashboardView> 
       episodeTitle: event.episodeTitle ?? String(details.episodeTitle ?? ""),
       stage: String(details.stage ?? "—"),
       message: event.message,
+      details: activityDetailsText(details),
       outcome,
     };
   });
@@ -331,7 +403,19 @@ export async function buildDashboard(config: AppConfig): Promise<DashboardView> 
     activity,
     cost: { today: Number(today.toFixed(2)), todayBudget, daily },
     queueCounts,
-    automation: getAutomationState(),
+    automation,
+    ops: {
+      workerRunning: automation.running,
+      lastActivityAt: activityEvents[0]?.at,
+      lastStartedAt: automation.lastStartedAt ?? lastStartedAt,
+      lastFinishedAt: automation.lastFinishedAt ?? lastFinishedAt,
+      queued: queueCounts.queued ?? 0,
+      running: queueCounts.running ?? 0,
+      failed: queueCounts.failed ?? 0,
+      quarantined: queueCounts.quarantined ?? 0,
+      waitingForCredits: queueCounts["waiting-for-credits"] ?? 0,
+      issues,
+    },
   };
 }
 
@@ -344,17 +428,21 @@ export async function buildQueueRows(config: AppConfig): Promise<QueueRow[]> {
     const model = [...job.history].reverse().find((h) => h.model)?.model ?? "—";
     return {
       id: job.id,
+      episodeKey: job.episodeKey,
+      title: job.episodeTitle,
       podcastSlug: job.podcastSlug,
       podcastTitle: podcast?.name ?? job.podcastSlug,
       podcastColor: colorFor(config, job.podcastSlug),
       episodeTitle: job.episodeTitle,
       state: job.state,
       stage: job.currentStage,
+      currentStage: job.currentStage,
       attempts: job.attempts,
       maxAttempts: job.maxAttempts,
       lastAttemptAt: job.lastAttemptAt,
       nextRetryAt: job.nextRetryAt,
       lastError: job.lastError,
+      updatedAt: job.updatedAt,
       model,
     };
   });

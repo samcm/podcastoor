@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { S, sMono, fmtUsd, fmtHoursMinutes } from "../tokens";
+import { S, sMono, fmtUsd, fmtHoursMinutes, fmtHm, relativeFromIso } from "../tokens";
 import { SPanel, SBtn, SStatus, SArt, KpiCard, Loading, ErrorNote } from "../components/ui";
 import { AddFeedButton } from "../components/AddFeedButton";
 import { api, runAdminAction, type DashboardView, type PodcastCard } from "../api";
@@ -40,12 +40,13 @@ function PodcastTile({ p, mobile }: { p: PodcastCard; mobile: boolean }) {
 function HomeBody({ data, mobile, reload }: { data: DashboardView; mobile: boolean; reload: () => void }) {
   const admin = useAdminSession();
   const k = data.kpis;
+  const blocked = data.ops.failed + data.ops.quarantined + data.ops.waitingForCredits;
   const healthy = data.podcasts.filter((p) => p.status === "ok" || p.status === "run").length;
   const attention = data.podcasts.length - healthy;
   const kpis: Array<[string, string, string, string?]> = [
     ["Podcasts", String(k.podcasts), `${healthy} healthy · ${attention} attn`],
     ["Episodes", String(k.episodes), `${k.processed} processed`],
-    ["Failed", String(k.failed), `${k.quarantined} quarantined`, S.red],
+    ["Attention", String(blocked), `${data.ops.waitingForCredits} credits · ${k.quarantined} quarantined`, blocked > 0 ? S.amber : undefined],
     ["Time saved", fmtHoursMinutes(k.savedSeconds), `${k.avgAdsPct}% avg ads`],
     ["Cost today", fmtUsd(k.costToday), `of ${fmtUsd(k.costTodayBudget)} budget`],
     ["Queue", `${k.queueQueued} / ${k.queueRunning}`, `${k.queueQueued} queued · ${k.queueRunning} running`],
@@ -60,6 +61,57 @@ function HomeBody({ data, mobile, reload }: { data: DashboardView; mobile: boole
           <KpiCard key={kk} k={kk} v={v} sub={sub} color={col} />
         ))}
       </div>
+
+      <SPanel
+        title={blocked > 0 ? "Operational attention" : "Operational status"}
+        subtitle={`worker ${data.ops.workerRunning ? "running" : "idle"} · last run ${relativeFromIso(data.ops.lastFinishedAt)} · last activity ${relativeFromIso(data.ops.lastActivityAt)}`}
+        right={
+          admin.isAdmin ? (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <SBtn variant="soft" onClick={() => runAdminAction(() => api.resetAttempts({ allQuarantined: true }), reload)}>
+                Reset blocked
+              </SBtn>
+              <SBtn variant="primary" onClick={() => runAdminAction(() => api.reprocess({ scope: "failed", downloadAudio: true, force: true }), reload)}>
+                Retry now
+              </SBtn>
+            </div>
+          ) : undefined
+        }
+      >
+        <div style={{ padding: 12, display: "grid", gridTemplateColumns: mobile ? "1fr" : "220px 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {[
+              ["queued", data.ops.queued, S.textDim],
+              ["running", data.ops.running, S.blue],
+              ["quarantined", data.ops.quarantined, S.red],
+              ["credits", data.ops.waitingForCredits, S.amber],
+            ].map(([label, value, color]) => (
+              <div key={label as string} style={{ border: `1px solid ${S.border}`, background: S.panelHi, padding: 8 }}>
+                <div style={{ ...sMono, fontSize: 9, color: S.textMute, textTransform: "uppercase", letterSpacing: 1 }}>{label}</div>
+                <div style={{ ...sMono, fontSize: 22, color: color as string, marginTop: 2 }}>{value as number}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ border: `1px solid ${S.border}`, background: S.panelHi, minHeight: 88 }}>
+            {data.ops.issues.length === 0 ? (
+              <div style={{ padding: 12, color: S.textDim, ...sMono, fontSize: 11 }}>No blocked jobs in the persisted queue.</div>
+            ) : (
+              data.ops.issues.slice(0, 4).map((issue) => (
+                <div key={issue.id} style={{ padding: "8px 10px", borderBottom: `1px solid ${S.border}` }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={{ ...sMono, fontSize: 10, color: issue.state === "waiting-for-credits" ? S.amber : S.red, textTransform: "uppercase" }}>{issue.state}</span>
+                    <span style={{ color: S.text, fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{issue.episodeTitle}</span>
+                    <span style={{ marginLeft: "auto", ...sMono, color: S.textMute, fontSize: 10 }}>{issue.attempts}/{issue.maxAttempts} · {fmtHm(issue.lastAttemptAt)}</span>
+                  </div>
+                  <div style={{ marginTop: 3, color: S.textMute, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {issue.podcastTitle} · {issue.stage || "—"}{issue.lastError ? ` · ${issue.lastError}` : ""}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </SPanel>
 
       <SPanel
         title="Podcasts"
@@ -110,7 +162,10 @@ function HomeBody({ data, mobile, reload }: { data: DashboardView; mobile: boole
                       )}
                     </td>
                     <td style={{ padding: "5px 8px", color: S.accent, width: 72 }}>{a.stage}</td>
-                    <td style={{ padding: "5px 12px 5px 8px", color: S.text }}>{a.message}</td>
+                    <td style={{ padding: "5px 12px 5px 8px", color: S.text }}>
+                      <div>{a.message}</div>
+                      {a.details && <div style={{ marginTop: 1, color: S.textMute, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.details}</div>}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -155,7 +210,7 @@ function HomeBody({ data, mobile, reload }: { data: DashboardView; mobile: boole
 }
 
 function FooterClock() {
-  return <div style={{ ...sMono, fontSize: 10, color: S.textMute, padding: "0 2px 4px" }}>auto-refresh every 5s · queue worker: studio-01</div>;
+  return <div style={{ ...sMono, fontSize: 10, color: S.textMute, padding: "0 2px 4px" }}>auto-refresh every 5s · queue worker state is persisted on disk</div>;
 }
 
 export function Home() {

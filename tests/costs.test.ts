@@ -15,7 +15,7 @@ test("cost summary groups spend by podcast, episode, model, and stage", async ()
     actualUsd: 0.35,
     llmCalls: 2,
     notes: [
-      "OpenRouter transcript actual: 1.0 min on xiaomi/mimo-v2-omni = $0.100000",
+      "OpenRouter transcript actual: 1.0 min on xiaomi/mimo-v2.5 = $0.100000",
       "ElevenLabs alignment actual: 1.0 min on elevenlabs-forced-alignment = $0.050000",
       "OpenRouter ad-detection actual: 10 input tokens + 5 output tokens on qwen/qwen3.6-flash = $0.200000"
     ]
